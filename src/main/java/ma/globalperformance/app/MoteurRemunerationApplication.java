@@ -9,7 +9,7 @@ import org.springframework.context.annotation.ComponentScan;
 @EnableBatchProcessing
 @ComponentScan({"ma.globalperformance.config", "ma.globalperformance.reader", 
 	"ma.globalperformance.processor","ma.globalperformance.writer", 
-	"ma.globalperformance.listener"})
+	"ma.globalperformance.listener", "ma.globalperformance.partitioner"})
 public class MoteurRemunerationApplication {
 
 	public static void main(String[] args) {

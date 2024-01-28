@@ -20,6 +20,8 @@ import org.springframework.orm.jpa.JpaTransactionManager;
 
 import ma.globalperformance.entity.ClientTransaction;
 import ma.globalperformance.entity.Remuneration;
+import ma.globalperformance.listner.RemunerationStepExecutionListener;
+import ma.globalperformance.partitioner.CodeEsPartitioner;
 import ma.globalperformance.processor.RemunerationItemProcessor;
 
 @Configuration
@@ -39,6 +41,9 @@ public class JobConfig {
 	
 	@Autowired
 	private JpaTransactionManager jpaTransactionManager;
+	
+	@Autowired
+    private CodeEsPartitioner codeEsPartitioner;
 
 	
 	@Autowired
@@ -48,21 +53,39 @@ public class JobConfig {
         this.jobBuilderFactory = jobBuilderFactory;
         this.stepBuilderFactory = stepBuilderFactory;
     }
-	
+
+    @Bean
+    public Job partitionedJob() {
+        return jobBuilderFactory.get("Remuneration Partitioned Job")
+                .incrementer(new RunIdIncrementer())
+                .start(masterStep())
+                .build();
+    }
+    
 	@Bean
 	public Job chunkJob() {
 		return jobBuilderFactory.get("Remuneration Chunk Job ...")
 				.incrementer(new RunIdIncrementer())
-				.start(reumerationChunkStep())
+				.start(masterStep())
 				.build();
 	}
 	
+	@Bean
+    public Step masterStep() {
+        return stepBuilderFactory.get("masterStep")
+                .partitioner(reumerationChunkStep().getName(), codeEsPartitioner)
+                .step(reumerationChunkStep())
+                .gridSize(10) // Vous pouvez modifier cela en fonction du nombre de partitions désirées
+                .build();
+    }
+	
 	public Step reumerationChunkStep() {
-		return stepBuilderFactory.get("First Chunk Step")
+		return stepBuilderFactory.get("reumerationChunkStep")
 				.<ClientTransaction, Remuneration>chunk(3)
 				.reader(jpaCursorItemReader())
 				.processor(remunerationItemProcessor)
 				.writer(jpaItemWriter())
+				.listener(new RemunerationStepExecutionListener())
 				.transactionManager(jpaTransactionManager)
 				.build();
 	}
