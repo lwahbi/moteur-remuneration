@@ -2,7 +2,10 @@ package ma.globalperformance.partitioner;
 
 import org.springframework.batch.core.partition.support.Partitioner;
 import org.springframework.batch.item.ExecutionContext;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
+
+import ma.globalperformance.model.CodeEsService;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -11,8 +14,12 @@ import java.util.List;
 @Component
 public class CodeEsPartitioner implements Partitioner {
 
-    private final List<String> codeEsList; // Liste des valeurs uniques de codeEs
+    private List<String> codeEsList;
 
+    @Autowired
+    public CodeEsPartitioner(CodeEsService codeEsService) {
+        this.codeEsList = codeEsService.getCodeEsList();
+    }
     public CodeEsPartitioner(List<String> codeEsList) {
         this.codeEsList = codeEsList;
     }
