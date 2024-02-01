@@ -27,8 +27,8 @@ import ma.globalperformance.processor.RemunerationItemProcessor;
 @Configuration
 public class JobConfig {
 
-	@Autowired
-	@Qualifier("datasource")
+	//@Autowired
+	//@Qualifier("datasource")
 	private DataSource datasource;
 
 	private final JobBuilderFactory jobBuilderFactory;
@@ -39,8 +39,8 @@ public class JobConfig {
 	@Qualifier("entityManagerFactory")
 	private EntityManagerFactory entityManagerFactory;
 	
-	@Autowired
-	private JpaTransactionManager jpaTransactionManager;
+	//@Autowired
+	//private JpaTransactionManager jpaTransactionManager;
 	
 	@Autowired
     private CodeEsPartitioner codeEsPartitioner;
@@ -80,6 +80,7 @@ public class JobConfig {
     }
 	
 	public Step reumerationChunkStep() {
+		JpaTransactionManager jpaTransactionManager = new JpaTransactionManager();
 		return stepBuilderFactory.get("reumerationChunkStep")
 				.<ClientTransaction, Remuneration>chunk(3)
 				.reader(jpaCursorItemReader())

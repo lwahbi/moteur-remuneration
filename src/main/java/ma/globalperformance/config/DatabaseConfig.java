@@ -13,7 +13,7 @@ import org.springframework.orm.jpa.JpaTransactionManager;
 import org.springframework.orm.jpa.LocalContainerEntityManagerFactoryBean;
 import org.springframework.orm.jpa.vendor.HibernateJpaVendorAdapter;
 
-@Configuration
+//@Configuration
 public class DatabaseConfig {
 
 	@Bean
@@ -34,6 +34,7 @@ public class DatabaseConfig {
 		lem.setJpaVendorAdapter(new HibernateJpaVendorAdapter());
 		lem.setPersistenceProviderClass(HibernatePersistenceProvider.class);
 		lem.afterPropertiesSet();
+
 		
 		return lem.getObject();
 	}
