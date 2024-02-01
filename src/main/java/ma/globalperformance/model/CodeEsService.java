@@ -7,6 +7,8 @@ import org.springframework.stereotype.Service;
 
 import ma.globalperformance.repository.ClientTransactionRepository;
 
+
+
 @Service
 public class CodeEsService {
 

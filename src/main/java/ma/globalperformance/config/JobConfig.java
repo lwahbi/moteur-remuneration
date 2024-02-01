@@ -23,6 +23,7 @@ import ma.globalperformance.entity.Remuneration;
 import ma.globalperformance.listner.RemunerationStepExecutionListener;
 import ma.globalperformance.partitioner.CodeEsPartitioner;
 import ma.globalperformance.processor.RemunerationItemProcessor;
+import ma.globalperformance.repository.ClientTransactionRepository;
 
 @Configuration
 public class JobConfig {
@@ -44,7 +45,6 @@ public class JobConfig {
 	
 	@Autowired
     private CodeEsPartitioner codeEsPartitioner;
-
 	
 	@Autowired
 	private RemunerationItemProcessor remunerationItemProcessor ;
