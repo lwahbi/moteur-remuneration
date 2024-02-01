@@ -7,7 +7,6 @@ import org.springframework.context.annotation.ComponentScan;
 
 @SpringBootApplication
 @EnableBatchProcessing
-@ComponentScan({"ma.globalperformance.*"})
 public class MoteurRemunerationApplication {
 
 	public static void main(String[] args) {
