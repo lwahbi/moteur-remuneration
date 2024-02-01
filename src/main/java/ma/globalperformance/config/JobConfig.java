@@ -16,7 +16,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.task.TaskExecutor;
 import org.springframework.orm.jpa.JpaTransactionManager;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import ma.globalperformance.entity.ClientTransaction;
 import ma.globalperformance.entity.Remuneration;
@@ -55,6 +57,16 @@ public class JobConfig {
     }
 
     @Bean
+    public TaskExecutor taskExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(10); // Nombre de threads à exécuter en parallèle
+        executor.setMaxPoolSize(10);
+        executor.setQueueCapacity(10);
+        executor.initialize();
+        return executor;
+    }
+
+    @Bean
     public Job partitionedJob() {
         return jobBuilderFactory.get("Remuneration Partitioned Job")
                 .incrementer(new RunIdIncrementer())
@@ -76,6 +88,7 @@ public class JobConfig {
                 .partitioner(reumerationChunkStep().getName(), codeEsPartitioner)
                 .step(reumerationChunkStep())
                 .gridSize(10) // Vous pouvez modifier cela en fonction du nombre de partitions désirées
+                .taskExecutor(taskExecutor()) // Utiliser le TaskExecutor pour l'exécution parallèle
                 .build();
     }
 	
