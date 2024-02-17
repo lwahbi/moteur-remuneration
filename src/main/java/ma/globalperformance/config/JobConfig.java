@@ -1,5 +1,7 @@
 package ma.globalperformance.config;
 
+import java.util.HashMap;
+
 import javax.persistence.EntityManagerFactory;
 import javax.sql.DataSource;
 
@@ -10,22 +12,20 @@ import org.springframework.batch.core.configuration.annotation.StepBuilderFactor
 import org.springframework.batch.core.configuration.annotation.StepScope;
 import org.springframework.batch.core.launch.support.RunIdIncrementer;
 import org.springframework.batch.item.ItemWriter;
-import org.springframework.batch.item.database.JpaCursorItemReader;
 import org.springframework.batch.item.database.JpaItemWriter;
+import org.springframework.batch.item.database.JpaPagingItemReader;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.task.TaskExecutor;
-import org.springframework.orm.jpa.JpaTransactionManager;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import ma.globalperformance.entity.ClientTransaction;
 import ma.globalperformance.entity.Remuneration;
-import ma.globalperformance.listner.RemunerationStepExecutionListener;
 import ma.globalperformance.partitioner.CodeEsPartitioner;
 import ma.globalperformance.processor.RemunerationItemProcessor;
-import ma.globalperformance.repository.ClientTransactionRepository;
 
 @Configuration
 public class JobConfig {
@@ -43,13 +43,13 @@ public class JobConfig {
 	private EntityManagerFactory entityManagerFactory;
 	
 	@Autowired
-	private JpaTransactionManager jpaTransactionManager;
-	
-	@Autowired
     private CodeEsPartitioner codeEsPartitioner;
 	
 	@Autowired
 	private RemunerationItemProcessor remunerationItemProcessor ;
+	
+    @Autowired
+    private JpaPagingItemReader<ClientTransaction> reader;
 
     JobConfig(JobBuilderFactory jobBuilderFactory, StepBuilderFactory stepBuilderFactory) {
         this.jobBuilderFactory = jobBuilderFactory;
@@ -59,23 +59,15 @@ public class JobConfig {
     @Bean
     public TaskExecutor taskExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-        executor.setCorePoolSize(10); // Nombre de threads à exécuter en parallèle
-        executor.setMaxPoolSize(10);
-        executor.setQueueCapacity(10);
+        executor.setCorePoolSize(6); // Nombre de threads à exécuter en parallèle
+        executor.setMaxPoolSize(500);
+        executor.setQueueCapacity(300);
         executor.initialize();
         return executor;
     }
 
-    @Bean
-    public Job partitionedJob() {
-        return jobBuilderFactory.get("Remuneration Partitioned Job")
-                .incrementer(new RunIdIncrementer())
-                .start(masterStep())
-                .build();
-    }
-    
 	@Bean
-	public Job chunkJob() {
+	public Job chunkJob() throws Exception {
 		return jobBuilderFactory.get("Remuneration Chunk Job ...")
 				.incrementer(new RunIdIncrementer())
 				.start(masterStep())
@@ -83,7 +75,7 @@ public class JobConfig {
 	}
 	
 	@Bean
-    public Step masterStep() {
+    public Step masterStep() throws Exception {
         return stepBuilderFactory.get("masterStep")
                 .partitioner(reumerationChunkStep().getName(), codeEsPartitioner)
                 .step(reumerationChunkStep())
@@ -92,30 +84,39 @@ public class JobConfig {
                 .build();
     }
 	
-	public Step reumerationChunkStep() {
+	public Step reumerationChunkStep() throws Exception {
 		return stepBuilderFactory.get("reumerationChunkStep")
-				.<ClientTransaction, Remuneration>chunk(3)
-				.reader(jpaCursorItemReader())
+				.<ClientTransaction, Remuneration>chunk(600)
+				.reader(reader)
 				.processor(remunerationItemProcessor)
 				.writer(jpaItemWriter())
-				.listener(new RemunerationStepExecutionListener())
-				.transactionManager(jpaTransactionManager)
+				//.listener(new RemunerationStepExecutionListener())
+				//.transactionManager(jpaTransactionManager)
 				.build();
 	}
 	
 	
-	@StepScope
-	@Bean
-	public JpaCursorItemReader<ClientTransaction> jpaCursorItemReader() {
-		JpaCursorItemReader<ClientTransaction> jpaCursorItemReader = 
-				new JpaCursorItemReader<ClientTransaction>();
-		
-		jpaCursorItemReader.setEntityManagerFactory(entityManagerFactory);
-		
-		jpaCursorItemReader.setQueryString("From ClientTransaction");
-		
-		return jpaCursorItemReader;
-	}
+    @Bean(destroyMethod = "") // http://stackoverflow.com/a/23089536
+    @StepScope
+    public JpaPagingItemReader<ClientTransaction> jpaPagingItemReader (@Value("#{stepExecutionContext[from]}") Integer from,
+                                               @Value("#{stepExecutionContext[to]}") Integer to
+    ) {
+    	JpaPagingItemReader<ClientTransaction> reader = new JpaPagingItemReader<ClientTransaction>();
+        reader.setEntityManagerFactory(entityManagerFactory);
+        reader.setSaveState(false);
+
+        reader.setQueryString("SELECT clt " +
+                              "FROM ClientTransaction AS clt " +
+                              "WHERE clt.id BETWEEN :from AND :to");
+        reader.setParameterValues(new HashMap<String, Object>() {
+            {
+                put("from", from.longValue());
+                put("to", to.longValue());
+            }
+        });
+
+        return reader;
+    }
 	
 	public ItemWriter<Remuneration> jpaItemWriter() {
 		JpaItemWriter<Remuneration> jpaItemWriter = 

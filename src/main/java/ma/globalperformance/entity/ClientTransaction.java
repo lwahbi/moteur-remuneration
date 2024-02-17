@@ -14,6 +14,8 @@ import javax.persistence.Table;
 import javax.persistence.Temporal;
 import javax.persistence.TemporalType;
 
+import org.hibernate.annotations.Index;
+
 @Entity
 @Table(name = "clients_transactions")
 public class ClientTransaction {
@@ -101,6 +103,7 @@ public class ClientTransaction {
     private Date dateValidation;
 
     @Column(name = "code_es")
+    @Index(name = "code_es_index")
     private String codeEs;
 
     // Getters and Setters
