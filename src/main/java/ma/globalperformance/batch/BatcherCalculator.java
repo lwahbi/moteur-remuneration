@@ -1,6 +1,9 @@
 package ma.globalperformance.batch;
 
-import antlr.TokenStreamRewriteEngine;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import lombok.extern.slf4j.Slf4j;
 import ma.globalperformance.dto.PalierDTO;
 import ma.globalperformance.entity.ClientTransaction;
@@ -8,6 +11,7 @@ import ma.globalperformance.entity.Remuneration;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
 import java.math.BigDecimal;
@@ -16,8 +20,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
-@Component
+//@Component
 @Slf4j
+@Service
 public class BatcherCalculator {
 
     private final RestTemplate restTemplate;
@@ -30,10 +35,29 @@ public class BatcherCalculator {
         this.jdbcTemplate = jdbcTemplate;
     }
 
-    @Scheduled(cron = "0 0 */1 * * *")
+   // @Scheduled(cron = "* 0/30 * * * *")
     public void calculateKPIs() {
         log.info("Executing periodic task to calculate KPIs");
-        List<PalierDTO> paliers = restTemplate.getForObject("http://164.68.125.91:8080/api/v1/paliers/findall", List.class);
+        //List<PalierDTO> paliers = (List<PalierDTO>) restTemplate.getForObject("http://164.68.125.91:8080/api/v1/paliers/findall", List.class);
+
+        ObjectMapper mapper = new ObjectMapper(); // or inject it as a dependency
+        mapper.registerModule(new JavaTimeModule());
+        mapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+
+        List<PalierDTO> paliers = mapper.convertValue(restTemplate.getForObject("http://164.68.125.91:8080/api/v1/paliers/findall",List.class), new TypeReference<List<PalierDTO>>() { });
+
+
+        assert paliers != null;
+        assert paliers.size() > 0;
+        //for each paliers we need to check if the codeOper is not null
+        paliers.forEach(palier -> {
+            log.info("Palier: " + palier);
+            assert palier.getCodeOper() != null;
+            assert palier.getTraitementUnitaire() != null;
+            assert palier.getTypeTransaction() != null;
+            assert palier.getTypeMontant() != null;
+        });
+
         List<String> codeEs = jdbcTemplate.queryForList("SELECT DISTINCT code_es FROM clients_transactions", String.class);
         codeEsSize = codeEs.size();
         codeEsSizeT = codeEs.size();
@@ -49,11 +73,11 @@ public class BatcherCalculator {
         Remuneration remuneration = new Remuneration();
         log.info("code_es: " + s);
         log.info("il reste : "+codeEsSize+" code es à traiter sur "+codeEsSizeT);
-
         codeEsSize--;
+
         List<ClientTransaction> transactions = jdbcTemplate.query("SELECT * FROM clients_transactions WHERE code_es = ?", new Object[]{s}, this::mapRow);
         Map<String, List<ClientTransaction>> transactionsParOper = transactions.stream().collect(Collectors.groupingBy(ClientTransaction::getCodeOper));
-        transactionsParOper.forEach((codeOper, transactionsList) -> processTransactions(codeOper, transactionsList, paliers, remuneration, s));
+        transactionsParOper.forEach((codeOper, transactionsList) -> processTransactionsParOper(codeOper, transactionsList, paliers, remuneration, s));
         remunerations.add(remuneration);
     }
 
@@ -64,23 +88,49 @@ public class BatcherCalculator {
         return transaction;
     }
 
-    private void processTransactions(String codeOper, List<ClientTransaction> transactionsList, List<PalierDTO> paliers, Remuneration remuneration, String s) {
+    private void processTransactionsParOper(String codeOper, List<ClientTransaction> transactionsList, List<PalierDTO> paliers, Remuneration remuneration, String s) {
         PalierDTO palier = paliers.stream().filter(p -> p.getCodeOper().equals(codeOper)).findFirst().orElse(null);
-        transactionsList.forEach(transaction -> processTransaction(transaction, palier, remuneration, s));
+       if(palier == null) {
+           log.info("Pas de palier pour le code oper: " + codeOper);
+           return;
+       }
+        if(palier.getTraitementUnitaire()) {
+            transactionsList.forEach(transaction -> {
+                processTransaction(transaction, palier, remuneration, s);
+                remuneration.setMontant(transaction.getMnt());
+                remuneration.setTrasactionType(palier.getTypeTransaction());
+                remuneration.setCreatedAt(new java.util.Date());
+                remuneration.setCodeOper(palier.getCodeOper());
+            });
+        }else{
+            //transactionList
+            BigDecimal montantCalcul = transactionsList.stream().map(ClientTransaction::getMnt).reduce(BigDecimal.ZERO, BigDecimal::add);
+            if("Frais".equalsIgnoreCase(palier.getTypeMontant())){
+                montantCalcul = transactionsList.stream().map(ClientTransaction::getFrais).reduce(BigDecimal.ZERO, BigDecimal::add);
+            }
+            remuneration.setCommission(calculateFrais(montantCalcul, palier));
+            remuneration.setMontant(montantCalcul);
+            remuneration.setTrasactionType(palier.getTypeTransaction());
+            remuneration.setCreatedAt(new java.util.Date());
+            remuneration.setCodeOper(palier.getCodeOper());
+        }
+        remuneration.setCodeEs(s);
+
     }
 
     private void processTransaction(ClientTransaction transaction, PalierDTO palier, Remuneration remuneration, String s) {
-        BigDecimal montantTransaction = transaction.getMnt();
-        if (palier != null && isTransactionInPalier(montantTransaction, palier)) {
-            BigDecimal frais = calculateFrais(montantTransaction, palier);
-            log.info("les Frais: " + frais);
-            remuneration.setCommission(frais);
+        BigDecimal montantCalcul = transaction.getMnt();
+        String typeMontant = palier.getTypeMontant();
+        if("Frais".equalsIgnoreCase(typeMontant)){
+            montantCalcul = transaction.getFrais();
         }
-        remuneration.setCodeEs(s);
-        remuneration.setMontant(montantTransaction);
-        remuneration.setTrasactionType(transaction.getTypeTransaction());
-        remuneration.setCreatedAt(new java.util.Date());
-        remuneration.setCodeOper(transaction.getCodeOper());
+
+        if (palier != null && isTransactionInPalier(montantCalcul, palier)) {
+            BigDecimal commission = calculateFrais(montantCalcul, palier);
+            log.info("les commission: " + commission);
+            remuneration.setCommission(commission);
+        }
+
     }
 
     private boolean isTransactionInPalier(BigDecimal montantTransaction, PalierDTO palier) {
