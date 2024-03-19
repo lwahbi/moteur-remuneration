@@ -17,7 +17,7 @@ import javax.persistence.TemporalType;
 @Entity
 @Table(name = "remuneration")
 @Data
-public class Remuneration {
+public class  Remuneration {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
