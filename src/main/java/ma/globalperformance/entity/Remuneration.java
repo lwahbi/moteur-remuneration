@@ -15,7 +15,7 @@ import javax.persistence.Temporal;
 import javax.persistence.TemporalType;
 
 @Entity
-@Table(name = "remuneration")
+@Table(name = "remuneration_2")
 @Data
 public class  Remuneration {
 

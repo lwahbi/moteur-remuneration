@@ -9,6 +9,7 @@ import ma.globalperformance.dto.PalierDTO;
 import ma.globalperformance.entity.ClientTransaction;
 import ma.globalperformance.entity.Remuneration;
 import org.hibernate.bytecode.internal.bytebuddy.BytecodeProviderImpl;
+import org.springframework.cglib.core.CollectionUtils;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -19,8 +20,13 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.stream.Collectors;
 
 //@Component
@@ -41,7 +47,6 @@ public class BatcherCalculator {
     // @Scheduled(cron = "* 0/30 * * * *")
     public void calculateKPIs() {
         log.info("Executing periodic task to calculate KPIs");
-        //List<PalierDTO> paliers = (List<PalierDTO>) restTemplate.getForObject("http://164.68.125.91:8080/api/v1/paliers/findall", List.class);
 
         ObjectMapper mapper = new ObjectMapper(); // or inject it as a dependency
         mapper.registerModule(new JavaTimeModule());
@@ -62,14 +67,70 @@ public class BatcherCalculator {
             assert palier.getTypeMontant() != null;
         });
 
-        List<String> codeEs = jdbcTemplate.queryForList("SELECT DISTINCT code_es FROM clients_transactions", String.class);
+        List<String> codeEs = jdbcTemplate.queryForList("SELECT DISTINCT code_es FROM clients_transactions_2", String.class);
+        //insert codeEs in a table remuneration
+        jdbcTemplate.update("INSERT INTO remuneration_2 (code_es) VALUES (?)", codeEs);
         codeEsSize = codeEs.size();
         codeEsSizeT = codeEs.size();
         log.info("size code es trouvé: " + codeEsSizeT);
         List<Remuneration> remunerations = new ArrayList<>();
-        LocalDateTime localDateTime = LocalDateTime.now();
-        codeEs.forEach(s -> processCodeEs(s, paliers, remunerations, localDateTime));
+        LocalDateTime startTime = LocalDateTime.now();
+
+        //codeEs.forEach(s -> processCodeEs(s, paliers, remunerations, localDateTime));
+        //remunerations.forEach(remuneration -> log.info("Remuneration: " + remuneration));
+
+        LocalDateTime currentTime = LocalDateTime.now();
+
+        long finished = ChronoUnit.MINUTES.between(startTime, currentTime);
+        log.info("finished on : " + finished + " Minutes");
+
+        remunerations = multithreadingProcessor(codeEs, paliers, remunerations, startTime);
         remunerations.forEach(remuneration -> log.info("Remuneration: " + remuneration));
+        
+
+        //update remunerations in the database
+        remunerations.forEach(remuneration -> {
+            jdbcTemplate.update("UPDATE remuneration_2 SET montant = ?, commission = ?, trasaction_type = ?, created_at = ?, code_oper = ? WHERE code_es = ?",
+                    remuneration.getMontant(), remuneration.getCommission(), remuneration.getTrasactionType(), remuneration.getCreatedAt(), remuneration.getCodeOper(), remuneration.getCodeEs());
+        });
+
+        //restTemplate post remunerations
+        restTemplate.postForObject("http://164.68.125.91:8080/api/v1/remunerations/saveall", remunerations, List.class);
+
+    }
+
+
+    private List<Remuneration> multithreadingProcessor(List<String> codeEs, List<PalierDTO> paliers, List<Remuneration> remunerations, LocalDateTime startTime) {
+        ExecutorService executorService = Executors.newFixedThreadPool(5);
+        List<Future<?>> futures = new ArrayList<>();
+
+        for (String s : codeEs) {
+            Future<?> future = executorService.submit(() -> processCodeEs(s, paliers, remunerations, startTime));
+            futures.add(future);
+        }
+
+// Wait for all tasks to complete
+        for (Future<?> future : futures) {
+            try {
+                future.get();
+            } catch (InterruptedException | ExecutionException e) {
+                e.printStackTrace();
+            }
+        }
+
+// Shutdown the executor service
+        executorService.shutdown();
+
+
+        List<String> codeEsRemunerate = remunerations.stream().map(Remuneration::getCodeEs).distinct().collect(Collectors.toList());
+        //delta de deux codeEs et CodeEsRemunerate
+        List<String> delta = new ArrayList<>(codeEs);
+        delta.removeAll(codeEsRemunerate);
+        if(delta.isEmpty()){
+            multithreadingProcessor(delta,paliers, remunerations, startTime);
+        }
+
+        return remunerations;
     }
 
     private void processCodeEs(String s, List<PalierDTO> paliers, List<Remuneration> remunerations, LocalDateTime start) {
@@ -80,7 +141,7 @@ public class BatcherCalculator {
         LocalDateTime currentTime = LocalDateTime.now();
 
         long timePassed = ChronoUnit.MINUTES.between(start, currentTime);
-        log.info("time passed : " + timePassed +" Minutes");
+        log.info("time passed : " + timePassed + " Minutes");
 
         List<ClientTransaction> transactions = jdbcTemplate.query("SELECT * FROM clients_transactions WHERE code_es = ?", new Object[]{s}, this::mapRow);
         Map<String, List<ClientTransaction>> transactionsParOper = transactions.stream().collect(Collectors.groupingBy(ClientTransaction::getCodeOper));
@@ -92,7 +153,7 @@ public class BatcherCalculator {
         ClientTransaction transaction = new ClientTransaction();
         transaction.setCodeOper(rs.getString("code_oper"));
         String mnt = rs.getString("mnt").replace(",", ".");
-        transaction.setMnt(new BigDecimal(mnt));
+        transaction.setMnt(mnt);
         return transaction;
     }
 
@@ -105,16 +166,21 @@ public class BatcherCalculator {
         if (palier.getTraitementUnitaire() != null && palier.getTraitementUnitaire()) {
             transactionsList.forEach(transaction -> {
                 processTransaction(transaction, palier, remuneration, s);
-                remuneration.setMontant(transaction.getMnt());
+                remuneration.setMontant(new BigDecimal(transaction.getMnt()));
                 remuneration.setTrasactionType(palier.getTypeTransaction());
                 remuneration.setCreatedAt(new java.util.Date());
                 remuneration.setCodeOper(palier.getCodeOper());
             });
         } else {
-            //transactionList
-            BigDecimal montantCalcul = transactionsList.stream().map(ClientTransaction::getMnt).reduce(BigDecimal.ZERO, BigDecimal::add);
+            //transactionList somme des montants et frais
+            BigDecimal montantCalcul = transactionsList.stream()
+                    .map(transaction -> new BigDecimal(transaction.getMnt()))
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+
             if ("Frais".equalsIgnoreCase(palier.getTypeMontant())) {
-                montantCalcul = transactionsList.stream().map(ClientTransaction::getFrais).reduce(BigDecimal.ZERO, BigDecimal::add);
+                montantCalcul = transactionsList.stream()
+                        .map(transaction -> new BigDecimal(transaction.getFrais()))
+                        .reduce(BigDecimal.ZERO, BigDecimal::add);
             }
             remuneration.setCommission(calculateFrais(montantCalcul, palier));
             remuneration.setMontant(montantCalcul);
@@ -127,10 +193,10 @@ public class BatcherCalculator {
     }
 
     private void processTransaction(ClientTransaction transaction, PalierDTO palier, Remuneration remuneration, String s) {
-        BigDecimal montantCalcul = transaction.getMnt();
+        BigDecimal montantCalcul = new BigDecimal(transaction.getMnt());
         String typeMontant = palier.getTypeMontant();
         if ("Frais".equalsIgnoreCase(typeMontant)) {
-            montantCalcul = transaction.getFrais();
+            montantCalcul = new BigDecimal(transaction.getFrais());
         }
 
         if (palier != null && isTransactionInPalier(montantCalcul, palier)) {
