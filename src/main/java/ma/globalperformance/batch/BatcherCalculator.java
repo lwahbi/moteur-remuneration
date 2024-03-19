@@ -122,11 +122,11 @@ public class BatcherCalculator {
         executorService.shutdown();
 
 
-        List<String> codeEsRemunerate = remunerations.stream().map(Remuneration::getCodeEs).distinct().collect(Collectors.toList());
+        List<String> codeEsRemunerate = remunerations.stream().map(Remuneration::getCodeEs).distinct().toList();
         //delta de deux codeEs et CodeEsRemunerate
         List<String> delta = new ArrayList<>(codeEs);
         delta.removeAll(codeEsRemunerate);
-        if(delta.isEmpty()){
+        if(!delta.isEmpty()){
             multithreadingProcessor(delta,paliers, remunerations, startTime);
         }
 
