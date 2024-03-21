@@ -63,8 +63,7 @@ public class BatcherCalculator {
             log.info("Palier: " + palier);
             assert palier.getCodeOper() != null;
             assert palier.getTraitementUnitaire() != null;
-            assert palier.getTypeTransaction() != null;
-            assert palier.getTypeMontant() != null;
+            assert palier.getTraitementUnitaire() != null;
         });
 
         List<String> codeEs = jdbcTemplate.queryForList("SELECT DISTINCT code_es FROM clients_transactions_2", String.class);
@@ -86,7 +85,7 @@ public class BatcherCalculator {
 
         remunerations = multithreadingProcessor(codeEs, paliers, remunerations, startTime);
         remunerations.forEach(remuneration -> log.info("Remuneration: " + remuneration));
-        
+
 
         //update remunerations in the database
         remunerations.forEach(remuneration -> {
@@ -167,7 +166,7 @@ public class BatcherCalculator {
             transactionsList.forEach(transaction -> {
                 processTransaction(transaction, palier, remuneration, s);
                 remuneration.setMontant(new BigDecimal(transaction.getMnt()));
-                remuneration.setTrasactionType(palier.getTypeTransaction());
+                remuneration.setTrasactionType(palier.getDescriptionService());
                 remuneration.setCreatedAt(new java.util.Date());
                 remuneration.setCodeOper(palier.getCodeOper());
             });
@@ -177,16 +176,16 @@ public class BatcherCalculator {
                     .map(transaction -> new BigDecimal(transaction.getMnt()))
                     .reduce(BigDecimal.ZERO, BigDecimal::add);
 
-            if ("Frais".equalsIgnoreCase(palier.getTypeMontant())) {
+            if ("Frais".equalsIgnoreCase(palier.getBaseCalcul())) {
                 montantCalcul = transactionsList.stream()
                         .map(transaction -> new BigDecimal(transaction.getFrais()))
                         .reduce(BigDecimal.ZERO, BigDecimal::add);
             }
             remuneration.setCommission(calculateFrais(montantCalcul, palier));
             remuneration.setMontant(montantCalcul);
-            remuneration.setTrasactionType(palier.getTypeTransaction());
+            remuneration.setTrasactionType(palier.getDescriptionService());
             remuneration.setCreatedAt(new java.util.Date());
-            remuneration.setCodeOper(palier.getCodeOper());
+            remuneration.setCodeOper(palier.getNomOper());
         }
         remuneration.setCodeEs(s);
 
@@ -194,7 +193,7 @@ public class BatcherCalculator {
 
     private void processTransaction(ClientTransaction transaction, PalierDTO palier, Remuneration remuneration, String s) {
         BigDecimal montantCalcul = new BigDecimal(transaction.getMnt());
-        String typeMontant = palier.getTypeMontant();
+        String typeMontant = palier.getBaseCalcul();
         if ("Frais".equalsIgnoreCase(typeMontant)) {
             montantCalcul = new BigDecimal(transaction.getFrais());
         }
@@ -228,8 +227,8 @@ public class BatcherCalculator {
 
     private BigDecimal calculateFraisPourcentage(BigDecimal montantTransaction, PalierDTO palier) {
         BigDecimal frais = montantTransaction.multiply(BigDecimal.valueOf(palier.getFraisPourcentage()));
-        BigDecimal minMontant = palier.getMinMontant() != null ? BigDecimal.valueOf(palier.getMinMontant()) : BigDecimal.ZERO;
-        BigDecimal maxMontant = palier.getMaxMontant() != null ? BigDecimal.valueOf(palier.getMaxMontant()) : BigDecimal.ZERO;
+        BigDecimal minMontant = palier.getMinCom() != null ? BigDecimal.valueOf(palier.getMinCom()) : BigDecimal.ZERO;
+        BigDecimal maxMontant = palier.getMaxCom() != null ? BigDecimal.valueOf(palier.getMaxCom()) : BigDecimal.ZERO;
         if (frais.compareTo(minMontant) < 0) {
             return minMontant;
         } else if (maxMontant.intValue() != -1 && frais.compareTo(maxMontant) > 0) {
