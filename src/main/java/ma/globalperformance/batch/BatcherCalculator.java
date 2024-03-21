@@ -121,11 +121,11 @@ public class BatcherCalculator {
         executorService.shutdown();
 
 
-        List<String> codeEsRemunerate = remunerations.stream().map(Remuneration::getCodeEs).distinct().collect(Collectors.toList());
+        List<String> codeEsRemunerate = remunerations.stream().map(Remuneration::getCodeEs).distinct().toList();
         //delta de deux codeEs et CodeEsRemunerate
         List<String> delta = new ArrayList<>(codeEs);
         delta.removeAll(codeEsRemunerate);
-        if(delta.isEmpty()){
+        if(!delta.isEmpty()){
             multithreadingProcessor(delta,paliers, remunerations, startTime);
         }
 
@@ -142,7 +142,7 @@ public class BatcherCalculator {
         long timePassed = ChronoUnit.MINUTES.between(start, currentTime);
         log.info("time passed : " + timePassed + " Minutes");
 
-        List<ClientTransaction> transactions = jdbcTemplate.query("SELECT * FROM clients_transactions WHERE code_es = ?", new Object[]{s}, this::mapRow);
+        List<ClientTransaction> transactions = jdbcTemplate.query("SELECT * FROM clients_transactions_2 WHERE code_es = ?", new Object[]{s}, this::mapRow);
         Map<String, List<ClientTransaction>> transactionsParOper = transactions.stream().collect(Collectors.groupingBy(ClientTransaction::getCodeOper));
         transactionsParOper.forEach((codeOper, transactionsList) -> processTransactionsParOper(codeOper, transactionsList, paliers, remuneration, s));
         remunerations.add(remuneration);
@@ -157,6 +157,8 @@ public class BatcherCalculator {
     }
 
     private void processTransactionsParOper(String codeOper, List<ClientTransaction> transactionsList, List<PalierDTO> paliers, Remuneration remuneration, String s) {
+        //List des paliers opers
+
         PalierDTO palier = paliers.stream().filter(p -> p.getCodeOper().equals(codeOper)).findFirst().orElse(null);
         if (palier == null) {
             log.info("Pas de palier pour le code oper: " + codeOper);
@@ -181,6 +183,7 @@ public class BatcherCalculator {
                         .map(transaction -> new BigDecimal(transaction.getFrais()))
                         .reduce(BigDecimal.ZERO, BigDecimal::add);
             }
+
             remuneration.setCommission(calculateFrais(montantCalcul, palier));
             remuneration.setMontant(montantCalcul);
             remuneration.setTrasactionType(palier.getDescriptionService());
