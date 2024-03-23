@@ -24,10 +24,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 import java.util.stream.Collectors;
 
 //@Component
@@ -38,10 +35,8 @@ public class BatcherCalculator {
     private final RestTemplate restTemplate;
 
     private final JdbcTemplate jdbcTemplate;
-    private Integer codeEsSizeT;
-    private final Integer REJEU = 0;
     @Value("${palier.service.url}")
-    private String url ;
+    private String url;
 
     public BatcherCalculator(RestTemplate restTemplate, JdbcTemplate jdbcTemplate) {
         this.restTemplate = restTemplate;
@@ -56,7 +51,7 @@ public class BatcherCalculator {
         mapper.registerModule(new JavaTimeModule());
         mapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
 
-        List<PalierDTO> paliers = mapper.convertValue(restTemplate.getForObject(url+"/api/v1/paliers/findall", List.class), new TypeReference<List<PalierDTO>>() {
+        List<PalierDTO> paliers = mapper.convertValue(restTemplate.getForObject(url + "/api/v1/paliers/findall", List.class), new TypeReference<>() {
         });
 
 
@@ -69,12 +64,12 @@ public class BatcherCalculator {
             assert palier.getTraitementUnitaire() != null;
         });
 
-        //List<String> codeEs = jdbcTemplate.queryForList("SELECT DISTINCT code_es FROM clients_transactions_2", String.class);
-        List<String> codeEs = Arrays.asList("008066","000509");
+        List<String> codeEs = jdbcTemplate.queryForList("SELECT DISTINCT code_es FROM clients_transactions_2", String.class);
+       // List<String> codeEs = Arrays.asList("008066");
         //insert codeEs in a table remuneration
         //codeEs.forEach(s -> jdbcTemplate.update("INSERT INTO remuneration_2 (code_es, code_oper, commission, created_at, montant, trasaction_type) VALUES (?,null,0,null,0,null)", s));
 
-        jdbcTemplate.batchUpdate(
+      /*  jdbcTemplate.batchUpdate(
                 "INSERT INTO remuneration_2 (code_es, code_oper, commission, created_at, montant, trasaction_type) VALUES (?,null,0,null,0,null)",
                 new BatchPreparedStatementSetter() {
                     @Override
@@ -89,10 +84,8 @@ public class BatcherCalculator {
                 }
         );
 
-
-        codeEsSizeT = codeEs.size();
-        log.info("size code es trouvé: " + codeEsSizeT);
-        List<Remuneration> remunerations = new ArrayList<>();
+*/
+        log.info("size code es trouvé: " + codeEs.size());
         LocalDateTime startTime = LocalDateTime.now();
 
         //codeEs.forEach(s -> processCodeEs(s, paliers, remunerations, localDateTime));
@@ -102,21 +95,18 @@ public class BatcherCalculator {
 
         long finished = ChronoUnit.MINUTES.between(startTime, currentTime);
         log.info("finished on : " + finished + " Minutes");
+        multithreadingProcessor(codeEs, paliers, startTime);
 
-        multithreadingProcessor(codeEs, paliers, remunerations, startTime, codeEsSizeT, REJEU);
-       // remunerations.forEach(remuneration -> log.info("Remuneration: " + remuneration));
-
-
+       /*
         // Batch update remunerations in the database
-        jdbcTemplate.batchUpdate("UPDATE remuneration_2 SET montant = ?, commission = ?, trasaction_type = ?, created_at = ?, code_oper = ? WHERE code_es = ?",
+        jdbcTemplate.batchUpdate("INSERT INTO remuneration_2 (montant, commission, trasaction_type, created_at, code_oper, code_es) VALUES (?, ?, ?, ?, ?, ?)",
                 new BatchPreparedStatementSetter() {
                     @Override
                     public void setValues(PreparedStatement ps, int i) throws SQLException {
                         Remuneration remuneration = remunerations.get(i);
-                        ps.setBigDecimal(1, remuneration.getMontant()!=null?remuneration.getMontant():BigDecimal.ZERO);
-                        ps.setBigDecimal(2, remuneration.getCommission()!=null?remuneration.getCommission():BigDecimal.ZERO);
+                        ps.setBigDecimal(1, remuneration.getMontant() != null ? remuneration.getMontant() : BigDecimal.ZERO);
+                        ps.setBigDecimal(2, remuneration.getCommission() != null ? remuneration.getCommission() : BigDecimal.ZERO);
                         ps.setString(3, remuneration.getTrasactionType());
-                        //Date date = Date.now();
                         Date date = new Date(System.currentTimeMillis());
                         ps.setDate(4, date);
                         ps.setString(5, remuneration.getCodeOper());
@@ -129,42 +119,62 @@ public class BatcherCalculator {
                     }
                 });
 
+        */
+
+        envoyerRemunerations();
+    }
+
+    private void envoyerRemunerations() {
+        log.info("Envoi des remunerations");
+        List<Remuneration> remunerations = jdbcTemplate.query("SELECT * FROM remuneration_2", (rs, rowNum) -> {
+            Remuneration remuneration = new Remuneration();
+            remuneration.setId(rs.getInt("id"));
+            remuneration.setCodeEs(rs.getString("code_es"));
+            remuneration.setMontant(rs.getBigDecimal("montant"));
+            remuneration.setCommission(rs.getBigDecimal("commission"));
+            remuneration.setTrasactionType(rs.getString("trasaction_type"));
+            remuneration.setCreatedAt(rs.getTimestamp("created_at").toLocalDateTime());
+            remuneration.setCodeOper(rs.getString("code_oper"));
+            return remuneration;
+        });
+
+
+        //envoyer les remunerations
         //restTemplate post remunerations
         // restTemplate.postForObject("http://164.68.125.91:8080/api/v1/remunerations/saveall", remunerations, List.class);
 
         // Create a list to hold all the CompletableFuture objects
         List<CompletableFuture<Void>> futures = new ArrayList<>();
-
-// Create an instance of RestTemplate
+        // Create an instance of RestTemplate
         RestTemplate restTemplate = new RestTemplate();
-
-// Loop through each remuneration
+        // Loop through each remuneration
         for (Remuneration remuneration : remunerations) {
             // Create a CompletableFuture
             CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
                 // Make the POST request
-                restTemplate.postForObject(url+"/api/v1/remunerations/save", remuneration, Void.class);
+                restTemplate.postForObject(url + "/api/v1/remunerations/save", remuneration, Void.class);
             });
 
             // Add the CompletableFuture to the list
             futures.add(future);
         }
 
-// Wait for all the CompletableFuture objects to complete
+        // Wait for all the CompletableFuture objects to complete
         CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
 
 
     }
 
 
-    private void multithreadingProcessor(List<String> codeEs, List<PalierDTO> paliers, List<Remuneration> remunerations, LocalDateTime startTime, Integer codeEsSize, Integer REJEU) {
+    private List<Remuneration> multithreadingProcessor(List<String> codeEs, List<PalierDTO> paliers, LocalDateTime startTime) {
         ExecutorService executorService = Executors.newFixedThreadPool(20); // Increased thread pool size
-        int codeEsTraite = codeEs.size();
+        CopyOnWriteArrayList<Remuneration> result = new CopyOnWriteArrayList<>();
         for (String s : codeEs) {
-
-            Integer finalCodeEsTraite = codeEsTraite;
-            executorService.submit(() -> processCodeEs(s, paliers, remunerations, startTime, finalCodeEsTraite));
-            codeEsTraite--;
+            executorService.submit(() -> {
+                List<Remuneration> remunerations = processCodeEs(s, paliers, startTime);
+                insertRemunerations(remunerations,s);
+                //result.addAll(remunerations);
+            });
         }
 
         executorService.shutdown();
@@ -177,29 +187,59 @@ public class BatcherCalculator {
         }
 
 
-        List<String> codeEsRemunerate = remunerations.stream().map(Remuneration::getCodeEs).distinct().toList();
+     /*   List<String> codeEsRemunerate = result.stream().map(Remuneration::getCodeEs).distinct().toList();
         //delta de deux codeEs et CodeEsRemunerate
         List<String> delta = new ArrayList<>(codeEs);
         delta.removeAll(codeEsRemunerate);
         if (!delta.isEmpty()) {
             REJEU++;
-            if (REJEU > 3) {
+            if (REJEU <= 3) {
                 //Rejeu atteint le max
                 log.info("REJEU atteint le max : " + REJEU);
-                return;
+                multithreadingProcessor(delta, paliers, startTime, REJEU);
             }
 
-            multithreadingProcessor(delta, paliers, remunerations, startTime, delta.size(), REJEU);
         }
-
+       
+      */
+        return result;
     }
 
-    private void processCodeEs(String s, List<PalierDTO> paliers, List<Remuneration> remunerations, LocalDateTime start, Integer codeEsSize) {
-        Remuneration remuneration = new Remuneration();
+    private void insertRemunerations(List<Remuneration> remunerations, String codeEs) {
+        //group remunerations by code_oper and type_transaction
+        Map<String, List<Remuneration>> remunerationsParOper = remunerations.stream().collect(Collectors.groupingBy(Remuneration::getCodeOper));
+        remunerationsParOper.forEach((codeOper, remunerationsList) -> {
+            Map<String, List<Remuneration>> remunerationsParTypeTransaction = remunerationsList.stream().collect(Collectors.groupingBy(Remuneration::getTrasactionType));
+           remunerationsParTypeTransaction.forEach((s, remunerations1) -> {
+               jdbcTemplate.batchUpdate("INSERT INTO remuneration_2 (montant, commission, trasaction_type, created_at, code_oper, code_es) VALUES (?, ?, ?, ?, ?, ?)", new BatchPreparedStatementSetter() {
+                   @Override
+                   public void setValues(PreparedStatement ps, int i) throws SQLException {
+                       //sum Montant and commission
+
+                       BigDecimal montantCalcul = remunerations1.stream().map(remuneration -> remuneration.getMontant()).reduce(BigDecimal.ZERO, BigDecimal::add);
+                       ps.setBigDecimal(1, montantCalcul);
+                          BigDecimal commissionCalcul = remunerations1.stream().map(remuneration -> remuneration.getCommission()).reduce(BigDecimal.ZERO, BigDecimal::add);
+                       ps.setBigDecimal(2, commissionCalcul);
+                       ps.setString(3, s);
+                       Date date = new Date(System.currentTimeMillis());
+                       ps.setDate(4, date);
+                       ps.setString(5, codeOper);
+                       ps.setString(6, codeEs);
+                   }
+
+                   @Override
+                   public int getBatchSize() {
+                       return remunerationsParTypeTransaction.size();
+                   }
+               });
+           });
+        });
+    }
+
+    private List<Remuneration> processCodeEs(String s, List<PalierDTO> paliers, LocalDateTime start) {
         log.info("code_es: " + s);
-        log.info("il reste : " + codeEsSize + " code es à traiter sur " + codeEsSizeT);
-        log.info("REJEU: " + REJEU);
         LocalDateTime currentTime = LocalDateTime.now();
+        List<Remuneration> remunerations = new ArrayList<>();
 
         long timePassed = ChronoUnit.MINUTES.between(start, currentTime);
         log.info("time passed : " + timePassed + " Minutes");
@@ -207,8 +247,9 @@ public class BatcherCalculator {
         List<ClientTransaction> transactions = jdbcTemplate.query("SELECT * FROM clients_transactions_2 WHERE code_es = ?", new Object[]{s}, this::mapRow);
         Map<String, List<ClientTransaction>> transactionsParOper = transactions.stream().collect(Collectors.groupingBy(ClientTransaction::getCodeOper));
         transactionsParOper.forEach((codeOper, transactionsList) -> {
-            processTransactionsParOper(codeOper, remunerations, transactionsList, paliers, s);
+            remunerations.addAll(processTransactionsParOper(codeOper, transactionsList, paliers, s));
         });
+        return remunerations;
     }
 
     private ClientTransaction mapRow(java.sql.ResultSet rs, int rowNum) throws java.sql.SQLException {
@@ -228,16 +269,16 @@ public class BatcherCalculator {
         return transaction;
     }
 
-    private void processTransactionsParOper(String codeOper, List<Remuneration> remunerations, List<ClientTransaction> transactionsList, List<PalierDTO> paliers, String s) {
+    private List<Remuneration> processTransactionsParOper(String codeOper, List<ClientTransaction> transactionsList, List<PalierDTO> paliers, String s) {
         //List des paliers opers
-        Remuneration remuneration = new Remuneration();
+        List<Remuneration> remunerations = new ArrayList<>();
 
         //  PalierDTO palier = paliers.stream().filter(p -> p.getCodeOper().equals(codeOper)).findFirst().orElse(null);
         List<PalierDTO> paliersOper = paliers.stream().filter(p -> p.getCodeOper().equals(codeOper)).toList();
         //stop thread if paliersOper is null or empty
         if (paliersOper.isEmpty()) {
             log.info("Pas de palier pour le code oper: " + codeOper);
-            return;
+            return new ArrayList<>();
         }
         if (paliersOper.size() > 1) {
             log.info("Plusieurs paliers pour le code oper: " + codeOper);
@@ -247,6 +288,7 @@ public class BatcherCalculator {
                 PalierDTO palier = paliersOper.stream().filter(p -> codeService.equals(p.getCodeService())).findFirst().orElse(null);
                 if (palier != null && palier.getTraitementUnitaire() != null && palier.getTraitementUnitaire()) {
                     transactionsListService.forEach(transaction -> {
+                        Remuneration remuneration = new Remuneration();
                         if ("Principal".equalsIgnoreCase(palier.getBaseCalcul())) {
                             remuneration.setMontant(new BigDecimal(transaction.getMontantPrincipal()));
                             remuneration.setCommission(calculateFrais(new BigDecimal(transaction.getMontantPrincipal()), palier));
@@ -273,50 +315,38 @@ public class BatcherCalculator {
                         remuneration.setTrasactionType(palier.getDescriptionService());
                         remuneration.setCreatedAt(LocalDateTime.now());
                         remuneration.setCodeOper(palier.getCodeOper());
+                        remuneration.setCodeEs(s);
+                        remunerations.add(remuneration);
                     });
                 } else if (palier != null && Boolean.FALSE.equals(palier.getTraitementUnitaire())) {
 
-
+                    Remuneration remuneration = new Remuneration();
                     if ("Principal".equalsIgnoreCase(palier.getBaseCalcul())) {
-                        BigDecimal montantCalcul = transactionsListService.stream()
-                                .map(transaction -> new BigDecimal(transaction.getMnt()))
-                                .reduce(BigDecimal.ZERO, BigDecimal::add);
+                        BigDecimal montantCalcul = transactionsListService.stream().map(transaction -> new BigDecimal(transaction.getMnt())).reduce(BigDecimal.ZERO, BigDecimal::add);
                         remuneration.setMontant(montantCalcul);
                         remuneration.setCommission(calculateFrais(montantCalcul, palier));
 
                     }
                     if ("Transaction".equalsIgnoreCase(palier.getBaseCalcul())) {
-                        BigDecimal montantCalcul = transactionsListService.stream()
-                                .map(transaction -> new BigDecimal(transaction.getMontantPrincipal()))
-                                .reduce(BigDecimal.ZERO, BigDecimal::add);
+                        BigDecimal montantCalcul = transactionsListService.stream().map(transaction -> new BigDecimal(transaction.getMontantPrincipal())).reduce(BigDecimal.ZERO, BigDecimal::add);
 
                         remuneration.setMontant(montantCalcul);
-                        Integer nombreTrx = transactionsListService.stream()
-                                .map(transaction -> Integer.parseInt(transaction.getNombreTrx()))
-                                .reduce(0, Integer::sum);
+                        Integer nombreTrx = transactionsListService.stream().map(transaction -> Integer.parseInt(transaction.getNombreTrx())).reduce(0, Integer::sum);
                         remuneration.setCommission(new BigDecimal(nombreTrx).multiply(new BigDecimal(palier.getFraisFixe())));
 
                     }
                     if ("Facture".equalsIgnoreCase(palier.getBaseCalcul())) {
-                        BigDecimal montantCalcul = transactionsListService.stream()
-                                .map(transaction -> new BigDecimal(transaction.getMontantPrincipal()))
-                                .reduce(BigDecimal.ZERO, BigDecimal::add);
+                        BigDecimal montantCalcul = transactionsListService.stream().map(transaction -> new BigDecimal(transaction.getMontantPrincipal())).reduce(BigDecimal.ZERO, BigDecimal::add);
                         remuneration.setMontant(montantCalcul);
-                        Integer nombreFacture = transactionsListService.stream()
-                                .map(transaction -> Integer.parseInt(transaction.getNombreFacture()))
-                                .reduce(0, Integer::sum);
+                        Integer nombreFacture = transactionsListService.stream().map(transaction -> Integer.parseInt(transaction.getNombreFacture())).reduce(0, Integer::sum);
 
                         remuneration.setCommission(new BigDecimal(nombreFacture).multiply(BigDecimal.valueOf(palier.getFraisFixe())));
                     }
                     if ("Frais".equalsIgnoreCase(palier.getBaseCalcul())) {
 
-                        BigDecimal montantCalcul = transactionsListService.stream()
-                                .map(transaction -> new BigDecimal(transaction.getMontantPrincipal()))
-                                .reduce(BigDecimal.ZERO, BigDecimal::add);
+                        BigDecimal montantCalcul = transactionsListService.stream().map(transaction -> new BigDecimal(transaction.getMontantPrincipal())).reduce(BigDecimal.ZERO, BigDecimal::add);
                         remuneration.setMontant(montantCalcul);
-                        BigDecimal frais = transactionsListService.stream()
-                                .map(transaction -> new BigDecimal(transaction.getFrais()))
-                                .reduce(BigDecimal.ZERO, BigDecimal::add);
+                        BigDecimal frais = transactionsListService.stream().map(transaction -> new BigDecimal(transaction.getFrais())).reduce(BigDecimal.ZERO, BigDecimal::add);
                         remuneration.setCommission(calculateFrais(frais, palier));
 
                     }
@@ -324,6 +354,8 @@ public class BatcherCalculator {
                     remuneration.setTrasactionType(palier.getDescriptionService());
                     remuneration.setCreatedAt(LocalDateTime.now());
                     remuneration.setCodeOper(palier.getNomOper());
+                    remuneration.setCodeEs(s);
+                    remunerations.add(remuneration);
                 }
             });
 
@@ -332,7 +364,7 @@ public class BatcherCalculator {
             PalierDTO palier = paliersOper.get(0);
             if (palier.getTraitementUnitaire() != null && palier.getTraitementUnitaire()) {
                 transactionsList.forEach(transaction -> {
-
+                    Remuneration remuneration = new Remuneration();
                     if ("Principal".equalsIgnoreCase(palier.getBaseCalcul())) {
                         remuneration.setMontant(new BigDecimal(transaction.getMontantPrincipal()));
                         remuneration.setCommission(calculateFrais(new BigDecimal(transaction.getMontantPrincipal()), palier));
@@ -354,58 +386,46 @@ public class BatcherCalculator {
                     remuneration.setTrasactionType(palier.getDescriptionService());
                     remuneration.setCreatedAt(LocalDateTime.now());
                     remuneration.setCodeOper(palier.getCodeOper());
+                    remuneration.setCodeEs(s);
+                    remunerations.add(remuneration);
                 });
             } else {
                 //transactionList somme des montants et frais
-
+                Remuneration remuneration = new Remuneration();
                 if ("Principal".equalsIgnoreCase(palier.getBaseCalcul())) {
-                    BigDecimal montantCalcul = transactionsList.stream()
-                            .map(transaction -> new BigDecimal(transaction.getMontantPrincipal()))
-                            .reduce(BigDecimal.ZERO, BigDecimal::add);
+                    BigDecimal montantCalcul = transactionsList.stream().map(transaction -> new BigDecimal(transaction.getMontantPrincipal())).reduce(BigDecimal.ZERO, BigDecimal::add);
                     remuneration.setMontant(montantCalcul);
                     remuneration.setCommission(calculateFrais(montantCalcul, palier));
                 }
                 if ("Transaction".equalsIgnoreCase(palier.getBaseCalcul())) {
-                    BigDecimal montantCalcul = transactionsList.stream()
-                            .map(transaction -> new BigDecimal(transaction.getMontantPrincipal()))
-                            .reduce(BigDecimal.ZERO, BigDecimal::add);
+                    BigDecimal montantCalcul = transactionsList.stream().map(transaction -> new BigDecimal(transaction.getMontantPrincipal())).reduce(BigDecimal.ZERO, BigDecimal::add);
                     remuneration.setMontant(montantCalcul);
-                    Integer nombreTrx = transactionsList.stream()
-                            .map(transaction -> Integer.parseInt(transaction.getNombreTrx()))
-                            .reduce(0, Integer::sum);
+                    Integer nombreTrx = transactionsList.stream().map(transaction -> Integer.parseInt(transaction.getNombreTrx())).reduce(0, Integer::sum);
                     remuneration.setCommission(new BigDecimal(nombreTrx).multiply(BigDecimal.valueOf(palier.getFraisFixe())));
 
                 }
                 if ("Facture".equalsIgnoreCase(palier.getBaseCalcul())) {
-                    BigDecimal montantCalcul = transactionsList.stream()
-                            .map(transaction -> new BigDecimal(transaction.getMontantPrincipal()))
-                            .reduce(BigDecimal.ZERO, BigDecimal::add);
+                    BigDecimal montantCalcul = transactionsList.stream().map(transaction -> new BigDecimal(transaction.getMontantPrincipal())).reduce(BigDecimal.ZERO, BigDecimal::add);
                     remuneration.setMontant(montantCalcul);
-                    Integer nombreFacture = transactionsList.stream()
-                            .map(transaction -> Integer.parseInt(transaction.getNombreFacture()))
-                            .reduce(0, Integer::sum);
+                    Integer nombreFacture = transactionsList.stream().map(transaction -> Integer.parseInt(transaction.getNombreFacture())).reduce(0, Integer::sum);
                     remuneration.setCommission(new BigDecimal(nombreFacture).multiply(BigDecimal.valueOf(palier.getFraisFixe())));
                 }
                 if ("Frais".equalsIgnoreCase(palier.getBaseCalcul())) {
-                    BigDecimal montantCalcul = transactionsList.stream()
-                            .map(transaction -> new BigDecimal(transaction.getMontantPrincipal()))
-                            .reduce(BigDecimal.ZERO, BigDecimal::add);
+                    BigDecimal montantCalcul = transactionsList.stream().map(transaction -> new BigDecimal(transaction.getMontantPrincipal())).reduce(BigDecimal.ZERO, BigDecimal::add);
                     remuneration.setMontant(montantCalcul);
-                    BigDecimal frais = transactionsList.stream()
-                            .map(transaction -> new BigDecimal(transaction.getFrais()))
-                            .reduce(BigDecimal.ZERO, BigDecimal::add);
+                    BigDecimal frais = transactionsList.stream().map(transaction -> new BigDecimal(transaction.getFrais())).reduce(BigDecimal.ZERO, BigDecimal::add);
                     remuneration.setCommission(calculateFrais(frais, palier));
 
                 }
 
-
                 remuneration.setTrasactionType(palier.getDescriptionService());
                 remuneration.setCreatedAt(LocalDateTime.now());
                 remuneration.setCodeOper(palier.getNomOper());
+                remuneration.setCodeEs(s);
+                remunerations.add(remuneration);
             }
         }
-        remuneration.setCodeEs(s);
-        remunerations.add(remuneration);
+        return remunerations;
 
     }
 
@@ -454,7 +474,7 @@ public class BatcherCalculator {
         BigDecimal minAmount = getAmount(tier.getMinCom());
         BigDecimal maxAmount = getAmount(tier.getMaxCom());
 
-        if(maxAmount.compareTo(BigDecimal.ZERO) > 0 && minAmount.compareTo(BigDecimal.ZERO) > 0) {
+        if (maxAmount.compareTo(BigDecimal.ZERO) > 0 && minAmount.compareTo(BigDecimal.ZERO) > 0) {
             fee = adjustFeeWithinRange(fee, minAmount, maxAmount);
         }
         log.info("Transaction fee percentage calculated as: " + fee);
@@ -462,20 +482,20 @@ public class BatcherCalculator {
     }
 
     // Extract common logic to get the BigDecimal amount
-    private BigDecimal getAmount(Double value){
+    private BigDecimal getAmount(Double value) {
         BigDecimal amount = value != null ? BigDecimal.valueOf(value) : BigDecimal.ZERO;
         log.info("Amount obtained: " + amount);
         return amount;
     }
 
-    private BigDecimal calculateFee(BigDecimal transactionAmount, PalierDTO tier){
+    private BigDecimal calculateFee(BigDecimal transactionAmount, PalierDTO tier) {
         BigDecimal fee = transactionAmount.multiply(BigDecimal.valueOf(tier.getFraisPourcentage()));
         log.info("Fee calculated: " + fee);
         return fee;
     }
 
     // Adjusts the fee within the min and max range
-    private BigDecimal adjustFeeWithinRange(BigDecimal fee, BigDecimal minAmount, BigDecimal maxAmount){
+    private BigDecimal adjustFeeWithinRange(BigDecimal fee, BigDecimal minAmount, BigDecimal maxAmount) {
         if (fee.compareTo(minAmount) < 0) {
             log.info("Fee is less than minimum amount, adjusting fee to minimum amount.");
             return minAmount;
