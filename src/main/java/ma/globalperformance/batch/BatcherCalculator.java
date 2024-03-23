@@ -8,6 +8,7 @@ import lombok.extern.slf4j.Slf4j;
 import ma.globalperformance.dto.PalierDTO;
 import ma.globalperformance.entity.ClientTransaction;
 import ma.globalperformance.entity.Remuneration;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.BatchPreparedStatementSetter;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -20,6 +21,7 @@ import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -38,6 +40,8 @@ public class BatcherCalculator {
     private final JdbcTemplate jdbcTemplate;
     private Integer codeEsSizeT;
     private final Integer REJEU = 0;
+    @Value("${palier.service.url}")
+    private String url ;
 
     public BatcherCalculator(RestTemplate restTemplate, JdbcTemplate jdbcTemplate) {
         this.restTemplate = restTemplate;
@@ -52,7 +56,7 @@ public class BatcherCalculator {
         mapper.registerModule(new JavaTimeModule());
         mapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
 
-        List<PalierDTO> paliers = mapper.convertValue(restTemplate.getForObject("http://164.68.125.91:8080/api/v1/paliers/findall", List.class), new TypeReference<List<PalierDTO>>() {
+        List<PalierDTO> paliers = mapper.convertValue(restTemplate.getForObject(url+"/api/v1/paliers/findall", List.class), new TypeReference<List<PalierDTO>>() {
         });
 
 
@@ -65,8 +69,8 @@ public class BatcherCalculator {
             assert palier.getTraitementUnitaire() != null;
         });
 
-        List<String> codeEs = jdbcTemplate.queryForList("SELECT DISTINCT code_es FROM clients_transactions_2", String.class);
-        // List<String> codeEs = Arrays.asList("008066","000509");
+        //List<String> codeEs = jdbcTemplate.queryForList("SELECT DISTINCT code_es FROM clients_transactions_2", String.class);
+        List<String> codeEs = Arrays.asList("008066","000509");
         //insert codeEs in a table remuneration
         //codeEs.forEach(s -> jdbcTemplate.update("INSERT INTO remuneration_2 (code_es, code_oper, commission, created_at, montant, trasaction_type) VALUES (?,null,0,null,0,null)", s));
 
@@ -139,7 +143,7 @@ public class BatcherCalculator {
             // Create a CompletableFuture
             CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
                 // Make the POST request
-                restTemplate.postForObject("http://164.68.125.91:8080/api/v1/remunerations/saveall", remuneration, Void.class);
+                restTemplate.postForObject(url+"/api/v1/remunerations/save", remuneration, Void.class);
             });
 
             // Add the CompletableFuture to the list
@@ -155,7 +159,7 @@ public class BatcherCalculator {
 
     private void multithreadingProcessor(List<String> codeEs, List<PalierDTO> paliers, List<Remuneration> remunerations, LocalDateTime startTime, Integer codeEsSize, Integer REJEU) {
         ExecutorService executorService = Executors.newFixedThreadPool(20); // Increased thread pool size
-        Integer codeEsTraite = codeEs.size();
+        int codeEsTraite = codeEs.size();
         for (String s : codeEs) {
 
             Integer finalCodeEsTraite = codeEsTraite;
@@ -202,8 +206,9 @@ public class BatcherCalculator {
 
         List<ClientTransaction> transactions = jdbcTemplate.query("SELECT * FROM clients_transactions_2 WHERE code_es = ?", new Object[]{s}, this::mapRow);
         Map<String, List<ClientTransaction>> transactionsParOper = transactions.stream().collect(Collectors.groupingBy(ClientTransaction::getCodeOper));
-        transactionsParOper.forEach((codeOper, transactionsList) -> processTransactionsParOper(codeOper, transactionsList, paliers, remuneration, s));
-        remunerations.add(remuneration);
+        transactionsParOper.forEach((codeOper, transactionsList) -> {
+            processTransactionsParOper(codeOper, remunerations, transactionsList, paliers, s);
+        });
     }
 
     private ClientTransaction mapRow(java.sql.ResultSet rs, int rowNum) throws java.sql.SQLException {
@@ -223,8 +228,9 @@ public class BatcherCalculator {
         return transaction;
     }
 
-    private void processTransactionsParOper(String codeOper, List<ClientTransaction> transactionsList, List<PalierDTO> paliers, Remuneration remuneration, String s) {
+    private void processTransactionsParOper(String codeOper, List<Remuneration> remunerations, List<ClientTransaction> transactionsList, List<PalierDTO> paliers, String s) {
         //List des paliers opers
+        Remuneration remuneration = new Remuneration();
 
         //  PalierDTO palier = paliers.stream().filter(p -> p.getCodeOper().equals(codeOper)).findFirst().orElse(null);
         List<PalierDTO> paliersOper = paliers.stream().filter(p -> p.getCodeOper().equals(codeOper)).toList();
@@ -265,7 +271,7 @@ public class BatcherCalculator {
                         // processTransaction(transaction, palier, remuneration, s);
                         // remuneration.setMontant(montantCalcul);
                         remuneration.setTrasactionType(palier.getDescriptionService());
-                        remuneration.setCreatedAt(new java.util.Date());
+                        remuneration.setCreatedAt(LocalDateTime.now());
                         remuneration.setCodeOper(palier.getCodeOper());
                     });
                 } else if (palier != null && Boolean.FALSE.equals(palier.getTraitementUnitaire())) {
@@ -316,7 +322,7 @@ public class BatcherCalculator {
                     }
 
                     remuneration.setTrasactionType(palier.getDescriptionService());
-                    remuneration.setCreatedAt(new java.util.Date());
+                    remuneration.setCreatedAt(LocalDateTime.now());
                     remuneration.setCodeOper(palier.getNomOper());
                 }
             });
@@ -346,7 +352,7 @@ public class BatcherCalculator {
                     }
 
                     remuneration.setTrasactionType(palier.getDescriptionService());
-                    remuneration.setCreatedAt(new java.util.Date());
+                    remuneration.setCreatedAt(LocalDateTime.now());
                     remuneration.setCodeOper(palier.getCodeOper());
                 });
             } else {
@@ -394,11 +400,12 @@ public class BatcherCalculator {
 
 
                 remuneration.setTrasactionType(palier.getDescriptionService());
-                remuneration.setCreatedAt(new java.util.Date());
+                remuneration.setCreatedAt(LocalDateTime.now());
                 remuneration.setCodeOper(palier.getNomOper());
             }
         }
         remuneration.setCodeEs(s);
+        remunerations.add(remuneration);
 
     }
 
@@ -432,23 +439,51 @@ public class BatcherCalculator {
     private BigDecimal calculateFrais(BigDecimal montantTransaction, PalierDTO palier) {
         BigDecimal frais = BigDecimal.ZERO;
         if (palier.getFraisPourcentage() != null) {
-            frais = calculateFraisPourcentage(montantTransaction, palier);
+            frais = calculateTransactionFeePercentage(montantTransaction, palier);
         } else if (palier.getFraisFixe() != null) {
             frais = BigDecimal.valueOf(palier.getFraisFixe());
         }
         return frais;
     }
 
-    private BigDecimal calculateFraisPourcentage(BigDecimal montantTransaction, PalierDTO palier) {
-        BigDecimal frais = montantTransaction.multiply(BigDecimal.valueOf(palier.getFraisPourcentage()));
-        BigDecimal minMontant = palier.getMinCom() != null ? BigDecimal.valueOf(palier.getMinCom()) : BigDecimal.ZERO;
-        BigDecimal maxMontant = palier.getMaxCom() != null ? BigDecimal.valueOf(palier.getMaxCom()) : BigDecimal.ZERO;
-        if (frais.compareTo(minMontant) < 0) {
-            return minMontant;
-        } else if (maxMontant.intValue() != -1 && frais.compareTo(maxMontant) > 0) {
-            return maxMontant;
-        } else {
-            return frais;
+
+    private BigDecimal calculateTransactionFeePercentage(BigDecimal transactionAmount, PalierDTO tier) {
+        log.info("Calculating transaction fee percentage...");
+
+        BigDecimal fee = calculateFee(transactionAmount, tier);
+        BigDecimal minAmount = getAmount(tier.getMinCom());
+        BigDecimal maxAmount = getAmount(tier.getMaxCom());
+
+        if(maxAmount.compareTo(BigDecimal.ZERO) > 0 && minAmount.compareTo(BigDecimal.ZERO) > 0) {
+            fee = adjustFeeWithinRange(fee, minAmount, maxAmount);
         }
+        log.info("Transaction fee percentage calculated as: " + fee);
+        return fee;
+    }
+
+    // Extract common logic to get the BigDecimal amount
+    private BigDecimal getAmount(Double value){
+        BigDecimal amount = value != null ? BigDecimal.valueOf(value) : BigDecimal.ZERO;
+        log.info("Amount obtained: " + amount);
+        return amount;
+    }
+
+    private BigDecimal calculateFee(BigDecimal transactionAmount, PalierDTO tier){
+        BigDecimal fee = transactionAmount.multiply(BigDecimal.valueOf(tier.getFraisPourcentage()));
+        log.info("Fee calculated: " + fee);
+        return fee;
+    }
+
+    // Adjusts the fee within the min and max range
+    private BigDecimal adjustFeeWithinRange(BigDecimal fee, BigDecimal minAmount, BigDecimal maxAmount){
+        if (fee.compareTo(minAmount) < 0) {
+            log.info("Fee is less than minimum amount, adjusting fee to minimum amount.");
+            return minAmount;
+        } else if (fee.compareTo(maxAmount) > 0) {
+            log.info("Fee is greater than maximum amount, adjusting fee to maximum amount.");
+            return maxAmount;
+        }
+        log.info("Fee is within range, no adjustment needed.");
+        return fee;
     }
 }
