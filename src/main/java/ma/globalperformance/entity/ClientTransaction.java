@@ -21,14 +21,11 @@ public class ClientTransaction {
     private String codeService;
     @Column(name = "type_transaction")
     private String typeTransaction;
-    private String mnt; // numeric(19, 2) in PostgreSQL is mapped to BigDecimal in Java
     private String montantPrincipal; // numeric(19, 2) in PostgreSQL is mapped to BigDecimal in Java
     private String frais; // numeric(19, 2) in PostgreSQL is mapped to BigDecimal in Java
     private String nombreTrx; // integer in PostgreSQL is mapped to Integer in Java
     private String nombreFacture; // integer in PostgreSQL is mapped to Integer in Java
-    @Column(name = "date_validation")
-    @Temporal(TemporalType.DATE)
-    private Date dateValidation;
+    private String dateTransaction;
 
     @Column(name = "code_es")
     @Index(name = "code_es_index")

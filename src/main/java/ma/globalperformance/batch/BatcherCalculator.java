@@ -18,12 +18,10 @@ import java.math.BigDecimal;
 import java.sql.Date;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.*;
 import java.util.stream.Collectors;
 
@@ -63,9 +61,25 @@ public class BatcherCalculator {
             assert palier.getCodeOper() != null;
             assert palier.getTraitementUnitaire() != null;
         });
+        //generate UUID for batchId
+        UUID batchId = UUID.randomUUID();
+        // start batch create gp_batch_statistic
+        jdbcTemplate.update("INSERT INTO gp_batch_statistic (batch_id, status, created_at, updated_at, created_by, batch_name) VALUES (?, ?, ?, ?, ?, ?)", batchId, "STARTED", LocalDateTime.now(), LocalDateTime.now(), "SYSTEM", "Calcul batch remuneration");
 
-        List<String> codeEs = jdbcTemplate.queryForList("SELECT DISTINCT code_es FROM clients_transactions_2", String.class);
-       // List<String> codeEs = Arrays.asList("008066");
+        //extract month from current date
+        LocalDate localDate = LocalDate.now();
+        int month = localDate.getMonthValue();
+
+        //strt batch
+        jdbcTemplate.update("TRUNCATE TABLE remuneration_2");
+
+        //jdcTemplate Get all the codeEs where month(date_validation) = month
+       // String sql = "SELECT DISTINCT code_es FROM clients_transactions_2 WHERE EXTRACT(MONTH FROM TO_TIMESTAMP(date_transaction, 'YYYYMMDDHH24MISS')) = ?";
+       // List<String> codeEs = jdbcTemplate.queryForList(sql, new Object[]{month}, String.class);
+
+        // Get all the codeEs
+        // List<String> codeEs = jdbcTemplate.queryForList("SELECT DISTINCT code_es FROM clients_transactions_2", String.class);
+         List<String> codeEs = Arrays.asList("008066");
         //insert codeEs in a table remuneration
         //codeEs.forEach(s -> jdbcTemplate.update("INSERT INTO remuneration_2 (code_es, code_oper, commission, created_at, montant, trasaction_type) VALUES (?,null,0,null,0,null)", s));
 
@@ -96,36 +110,24 @@ public class BatcherCalculator {
         long finished = ChronoUnit.MINUTES.between(startTime, currentTime);
         log.info("finished on : " + finished + " Minutes");
         multithreadingProcessor(codeEs, paliers, startTime);
+        // end batch create gp_batch_statistic
+        jdbcTemplate.update("UPDATE gp_batch_statistic SET status = ?, updated_at = ? WHERE batch_id = ?", "FINISHED", LocalDateTime.now(), batchId);
 
-       /*
-        // Batch update remunerations in the database
-        jdbcTemplate.batchUpdate("INSERT INTO remuneration_2 (montant, commission, trasaction_type, created_at, code_oper, code_es) VALUES (?, ?, ?, ?, ?, ?)",
-                new BatchPreparedStatementSetter() {
-                    @Override
-                    public void setValues(PreparedStatement ps, int i) throws SQLException {
-                        Remuneration remuneration = remunerations.get(i);
-                        ps.setBigDecimal(1, remuneration.getMontant() != null ? remuneration.getMontant() : BigDecimal.ZERO);
-                        ps.setBigDecimal(2, remuneration.getCommission() != null ? remuneration.getCommission() : BigDecimal.ZERO);
-                        ps.setString(3, remuneration.getTrasactionType());
-                        Date date = new Date(System.currentTimeMillis());
-                        ps.setDate(4, date);
-                        ps.setString(5, remuneration.getCodeOper());
-                        ps.setString(6, remuneration.getCodeEs());
-                    }
+        restTemplate.postForObject(url + "/api/v1/facture/savealles", codeEs, Void.class);
 
-                    @Override
-                    public int getBatchSize() {
-                        return remunerations.size();
-                    }
-                });
-
-        */
 
         envoyerRemunerations();
+
+
+
     }
 
     private void envoyerRemunerations() {
         log.info("Envoi des remunerations");
+        //start batch
+
+
+        //get all remunerations
         List<Remuneration> remunerations = jdbcTemplate.query("SELECT * FROM remuneration_2", (rs, rowNum) -> {
             Remuneration remuneration = new Remuneration();
             remuneration.setId(rs.getInt("id"));
@@ -139,25 +141,41 @@ public class BatcherCalculator {
         });
 
 
+
+
         //envoyer les remunerations
         //restTemplate post remunerations
         // restTemplate.postForObject("http://164.68.125.91:8080/api/v1/remunerations/saveall", remunerations, List.class);
+        //restTemplate.postForObject("http://localhost:8080/api/v1/remunerations/saveall", remunerations, List.class);
 
         // Create a list to hold all the CompletableFuture objects
-        List<CompletableFuture<Void>> futures = new ArrayList<>();
+            List<CompletableFuture<Void>> futures = new ArrayList<>();
         // Create an instance of RestTemplate
         RestTemplate restTemplate = new RestTemplate();
-        // Loop through each remuneration
-        for (Remuneration remuneration : remunerations) {
+
+        //group remunerations by codeEs
+        Map<String, List<Remuneration>> remunerationsParEs = remunerations.stream().collect(Collectors.groupingBy(Remuneration::getCodeEs));
+        remunerationsParEs.forEach((codeEs, remunerationsList) -> {
             // Create a CompletableFuture
             CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
-                // Make the POST request
-                restTemplate.postForObject(url + "/api/v1/remunerations/save", remuneration, Void.class);
+                // Make the POST request /api/v1/remunerations/saveall/{codeEs}
+                restTemplate.postForObject(url + "/api/v1/remunerations/saveall/"+codeEs, remunerationsList, Void.class);
             });
 
             // Add the CompletableFuture to the list
             futures.add(future);
-        }
+        });
+        // Loop through each remuneration
+      /*/  for (Remuneration remuneration : remunerations) {
+            // Create a CompletableFuture
+            CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
+                // Make the POST request /api/v1/remunerations/saveall/{codeEs}
+                restTemplate.postForObject(url + "/api/v1/remunerations/saveall/"+, remuneration, Void.class);
+            });
+
+            // Add the CompletableFuture to the list
+            futures.add(future);
+        }*/
 
         // Wait for all the CompletableFuture objects to complete
         CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
@@ -172,7 +190,7 @@ public class BatcherCalculator {
         for (String s : codeEs) {
             executorService.submit(() -> {
                 List<Remuneration> remunerations = processCodeEs(s, paliers, startTime);
-                insertRemunerations(remunerations,s);
+                insertRemunerations(remunerations, s);
                 //result.addAll(remunerations);
             });
         }
@@ -210,29 +228,29 @@ public class BatcherCalculator {
         Map<String, List<Remuneration>> remunerationsParOper = remunerations.stream().collect(Collectors.groupingBy(Remuneration::getCodeOper));
         remunerationsParOper.forEach((codeOper, remunerationsList) -> {
             Map<String, List<Remuneration>> remunerationsParTypeTransaction = remunerationsList.stream().collect(Collectors.groupingBy(Remuneration::getTrasactionType));
-           remunerationsParTypeTransaction.forEach((s, remunerations1) -> {
-               jdbcTemplate.batchUpdate("INSERT INTO remuneration_2 (montant, commission, trasaction_type, created_at, code_oper, code_es) VALUES (?, ?, ?, ?, ?, ?)", new BatchPreparedStatementSetter() {
-                   @Override
-                   public void setValues(PreparedStatement ps, int i) throws SQLException {
-                       //sum Montant and commission
+            remunerationsParTypeTransaction.forEach((s, remunerations1) -> {
+                jdbcTemplate.batchUpdate("INSERT INTO remuneration_2 (montant, commission, trasaction_type, created_at, code_oper, code_es) VALUES (?, ?, ?, ?, ?, ?)", new BatchPreparedStatementSetter() {
+                    @Override
+                    public void setValues(PreparedStatement ps, int i) throws SQLException {
+                        //sum Montant and commission
 
-                       BigDecimal montantCalcul = remunerations1.stream().map(remuneration -> remuneration.getMontant()).reduce(BigDecimal.ZERO, BigDecimal::add);
-                       ps.setBigDecimal(1, montantCalcul);
-                          BigDecimal commissionCalcul = remunerations1.stream().map(remuneration -> remuneration.getCommission()).reduce(BigDecimal.ZERO, BigDecimal::add);
-                       ps.setBigDecimal(2, commissionCalcul);
-                       ps.setString(3, s);
-                       Date date = new Date(System.currentTimeMillis());
-                       ps.setDate(4, date);
-                       ps.setString(5, codeOper);
-                       ps.setString(6, codeEs);
-                   }
+                        BigDecimal montantCalcul = remunerations1.stream().map(remuneration -> remuneration.getMontant()).reduce(BigDecimal.ZERO, BigDecimal::add);
+                        ps.setBigDecimal(1, montantCalcul);
+                        BigDecimal commissionCalcul = remunerations1.stream().map(remuneration -> remuneration.getCommission()).reduce(BigDecimal.ZERO, BigDecimal::add);
+                        ps.setBigDecimal(2, commissionCalcul);
+                        ps.setString(3, s);
+                        Date date = new Date(System.currentTimeMillis());
+                        ps.setDate(4, date);
+                        ps.setString(5, codeOper);
+                        ps.setString(6, codeEs);
+                    }
 
-                   @Override
-                   public int getBatchSize() {
-                       return remunerationsParTypeTransaction.size();
-                   }
-               });
-           });
+                    @Override
+                    public int getBatchSize() {
+                        return remunerationsParTypeTransaction.size();
+                    }
+                });
+            });
         });
     }
 
@@ -258,12 +276,11 @@ public class BatcherCalculator {
         transaction.setCodeOper(rs.getString("code_oper"));
         transaction.setCodeService(rs.getString("code_service"));
         transaction.setTypeTransaction(rs.getString("type_transaction"));
-        transaction.setMnt(rs.getString("mnt"));
         transaction.setMontantPrincipal(rs.getString("montant_principal"));
         transaction.setFrais(rs.getString("frais"));
         transaction.setNombreTrx(rs.getString("nombre_trx"));
         transaction.setNombreFacture(rs.getString("nombre_facture"));
-        transaction.setDateValidation(rs.getDate("date_validation"));
+        transaction.setDateTransaction(rs.getString("date_transaction"));
         transaction.setCodeEs(rs.getString("code_es"));
 
         return transaction;
@@ -322,7 +339,7 @@ public class BatcherCalculator {
 
                     Remuneration remuneration = new Remuneration();
                     if ("Principal".equalsIgnoreCase(palier.getBaseCalcul())) {
-                        BigDecimal montantCalcul = transactionsListService.stream().map(transaction -> new BigDecimal(transaction.getMnt())).reduce(BigDecimal.ZERO, BigDecimal::add);
+                        BigDecimal montantCalcul = transactionsListService.stream().map(transaction -> new BigDecimal(transaction.getMontantPrincipal())).reduce(BigDecimal.ZERO, BigDecimal::add);
                         remuneration.setMontant(montantCalcul);
                         remuneration.setCommission(calculateFrais(montantCalcul, palier));
 
