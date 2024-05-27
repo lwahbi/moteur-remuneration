@@ -9,11 +9,11 @@ import javax.annotation.PostConstruct;
 import javax.sql.DataSource;
 import java.sql.SQLException;
 
-@Configuration
+//@Configuration
 @Slf4j
 public class DataSourceConfig {
 
-    @Autowired
+   // @Autowired
     private DataSource dataSource;
 
     @PostConstruct
