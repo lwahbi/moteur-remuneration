@@ -78,8 +78,8 @@ public class BatcherCalculator {
         // List<String> codeEs = jdbcTemplate.queryForList(sql, new Object[]{month}, String.class);
 
         // Get all the codeEs
-        //List<String> codeEs = jdbcTemplate.queryForList("SELECT DISTINCT code_es FROM clients_transactions_2", String.class);
-        List<String> codeEs = Arrays.asList("000015");
+        List<String> codeEs = jdbcTemplate.queryForList("SELECT DISTINCT code_es FROM clients_transactions_2", String.class);
+        //List<String> codeEs = Arrays.asList("000015");
 
 
         log.info("size code es trouvé: " + codeEs.size());
@@ -160,15 +160,11 @@ public class BatcherCalculator {
 
 
     private List<Remuneration> multithreadingProcessor(List<String> codeEs, List<PalierDTO> paliers, LocalDateTime startTime) {
-        ExecutorService executorService = Executors.newFixedThreadPool(1); // Increased thread pool size
+        ExecutorService executorService = Executors.newFixedThreadPool(20); // Increased thread pool size
         CopyOnWriteArrayList<Remuneration> result = new CopyOnWriteArrayList<>();
         for (String s : codeEs) {
             executorService.submit(() -> {
-                if (s.equals("000015")) {
-                    System.out.println("code es 000015");
-                }
                 List<Remuneration> remunerations = processCodeEs(s, paliers, startTime);
-                remunerations.forEach(remuneration -> System.out.println(remuneration.toString()));
                 insertRemunerations(remunerations, s);
             });
         }
@@ -188,9 +184,6 @@ public class BatcherCalculator {
     private void insertRemunerations(List<Remuneration> remunerations, String codeEs) {
         //group remunerations by code_oper and type_transaction
         // show  all  remunerations int the  list on sytem.out
-        System.out.println("========================================");
-        remunerations.forEach(re -> System.out.println(re.toString()));
-        System.out.println("========================================");
         Map<String, List<Remuneration>> remunerationsParOper = remunerations.stream().collect(Collectors.groupingBy(Remuneration::getCodeService));
         remunerationsParOper.forEach((codeService, remunerationsList) -> {
             Map<String, List<Remuneration>> remunerationsParTypeTransaction = remunerationsList.stream().collect(Collectors.groupingBy(Remuneration::getTrasactionType));
@@ -226,17 +219,18 @@ public class BatcherCalculator {
 
     private List<Remuneration> processCodeEs(String s, List<PalierDTO> paliers, LocalDateTime start) {
         log.info("code_es: " + s);
-        List<Remuneration> remunerations = new ArrayList<>();
+        List<Remuneration> remunerationsResult = new ArrayList<>();
 
         List<ClientTransaction> transactions = jdbcTemplate.query("SELECT * FROM clients_transactions_2 WHERE code_es = ?", new Object[]{s}, this::mapRow);
         Map<String, List<ClientTransaction>> transactionsParOper = transactions.stream()
-                //   .filter(clientTransaction -> clientTransaction.getCodeOper().equals("0080"))
+                  // .filter(clientTransaction -> clientTransaction.getCodeOper().equals("0056"))
                 .collect(Collectors.groupingBy(ClientTransaction::getCodeOper));
 
         transactionsParOper.forEach((codeOper, transactionsList) -> {
-            remunerations.addAll(processTransactionsParOper(codeOper, transactionsList, paliers, s));
+                List<Remuneration> remunerations = processTransactionsParOper(codeOper, transactionsList, paliers, s);
+            remunerationsResult.addAll(remunerations);
         });
-        return remunerations;
+        return remunerationsResult;
     }
 
     private ClientTransaction mapRow(java.sql.ResultSet rs, int rowNum) throws java.sql.SQLException {
@@ -377,7 +371,7 @@ public class BatcherCalculator {
 
                     remuneration.setTrasactionType(palier.getDescriptionService());
                     remuneration.setCreatedAt(LocalDateTime.now());
-                    remuneration.setCodeOper(palier.getNomOper());
+                    remuneration.setCodeOper(palier.getCodeOper());
                     remuneration.setCodeService(codeService);
                     remuneration.setCodeEs(s);
                     remunerations.add(remuneration);
