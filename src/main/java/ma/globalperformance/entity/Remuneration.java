@@ -29,6 +29,7 @@ public class  Remuneration {
     @Column(name = "montant", nullable = false, precision = 19, scale = 2)
     private BigDecimal montant;
     private String codeOper;
+    private String codeService;
     @Column(name = "commission", nullable = false, precision = 19, scale = 2)
     private BigDecimal commission;
     private String trasactionType;
