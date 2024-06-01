@@ -57,7 +57,6 @@ public class BatcherCalculator {
         assert !paliers.isEmpty();
         //for each paliers we need to check if the codeOper is not null
         paliers.forEach(palier -> {
-            log.info("Palier: " + palier);
             assert palier.getCodeOper() != null;
             assert palier.getTraitementUnitaire() != null;
         });
@@ -84,33 +83,28 @@ public class BatcherCalculator {
 
         log.info("size code es trouvé: " + codeEs.size());
         LocalDateTime startTime = LocalDateTime.now();
-        log.info("start traitement on : " + startTime + " Minutes");
 
 
         multithreadingProcessor(codeEs, paliers, startTime);
 
 
         LocalDateTime currentTime = LocalDateTime.now();
-        long finished = ChronoUnit.MINUTES.between(startTime, currentTime);
-        log.info("finished traitement on : " + finished + " Minutes");
+        long finished = ChronoUnit.SECONDS.between(startTime, currentTime);
+        log.info("finished traitement on : " + finished + " Seconds");
 
-        log.info("-------------------------------------------------------------------------------");
+        log.info("--------------------------------------------------------------------------------------------------------------------------------------------");
 
 
-        startTime = LocalDateTime.now();
-
-        log.info("start sending facture on : " + startTime + " Minutes");
-
-        multithreadingProcessor(codeEs, paliers, startTime);
         // end batch create gp_batch_statistic
         jdbcTemplate.update("UPDATE gp_batch_statistic SET status = ?, updated_at = ? WHERE batch_id = ?", "FINISHED", LocalDateTime.now(), batchId);
 
         //restTemplate.postForObject(url + "/api/v1/facture/savealles", codeEs, Void.class);
 
-
+        startTime = LocalDateTime.now();
         envoyerRemunerations();
-        ChronoUnit.MINUTES.between(startTime, currentTime);
-        log.info("finished traitement on : " + finished + " Minutes");
+        currentTime = LocalDateTime.now();
+        finished = ChronoUnit.SECONDS.between(startTime, currentTime);
+        log.info("finished traitement on : " + finished + " Seconds");
 
 
     }
@@ -160,9 +154,10 @@ public class BatcherCalculator {
 
 
     private List<Remuneration> multithreadingProcessor(List<String> codeEs, List<PalierDTO> paliers, LocalDateTime startTime) {
-        ExecutorService executorService = Executors.newFixedThreadPool(20); // Increased thread pool size
+        ExecutorService executorService = Executors.newFixedThreadPool(30); // Increased thread pool size
         CopyOnWriteArrayList<Remuneration> result = new CopyOnWriteArrayList<>();
         for (String s : codeEs) {
+            log.info("code_es ==================================================================================================================> : " + s);
             executorService.submit(() -> {
                 List<Remuneration> remunerations = processCodeEs(s, paliers, startTime);
                 insertRemunerations(remunerations, s);
@@ -171,7 +166,8 @@ public class BatcherCalculator {
 
         executorService.shutdown();
         try {
-            if (!executorService.awaitTermination(60, TimeUnit.SECONDS)) {
+            if (!executorService.awaitTermination(60, TimeUnit.MINUTES)) {
+                log.info("Shutting down executor service, it is taking too long to process (upper to 60 min) the tasks in the queue");
                 executorService.shutdownNow();
             }
         } catch (InterruptedException e) {
@@ -184,8 +180,8 @@ public class BatcherCalculator {
     private void insertRemunerations(List<Remuneration> remunerations, String codeEs) {
         //group remunerations by code_oper and type_transaction
         // show  all  remunerations int the  list on sytem.out
-        Map<String, List<Remuneration>> remunerationsParOper = remunerations.stream().collect(Collectors.groupingBy(Remuneration::getCodeService));
-        remunerationsParOper.forEach((codeService, remunerationsList) -> {
+        Map<String, List<Remuneration>> remunerationsParOper = remunerations.stream().collect(Collectors.groupingBy(Remuneration::getCodeOper));
+        remunerationsParOper.forEach((codeOper, remunerationsList) -> {
             Map<String, List<Remuneration>> remunerationsParTypeTransaction = remunerationsList.stream().collect(Collectors.groupingBy(Remuneration::getTrasactionType));
 
 
@@ -203,9 +199,13 @@ public class BatcherCalculator {
                         ps.setString(3, s);
                         Date date = new Date(System.currentTimeMillis());
                         ps.setDate(4, date);
-                        ps.setString(5, remunerations1.get(0).getCodeOper());
+                        ps.setString(5, codeOper);
                         ps.setString(6, codeEs);
-                        ps.setString(7, codeService);
+                        if(remunerations1.get(0).getCodeService() != null) {
+                            ps.setString(7, remunerations1.get(0).getCodeService());
+                        }else {
+                            ps.setString(7, "****");
+                        }
                     }
 
                     @Override
@@ -218,16 +218,16 @@ public class BatcherCalculator {
     }
 
     private List<Remuneration> processCodeEs(String s, List<PalierDTO> paliers, LocalDateTime start) {
-        log.info("code_es: " + s);
+      //  log.info("code_es: " + s);
         List<Remuneration> remunerationsResult = new ArrayList<>();
 
         List<ClientTransaction> transactions = jdbcTemplate.query("SELECT * FROM clients_transactions_2 WHERE code_es = ?", new Object[]{s}, this::mapRow);
         Map<String, List<ClientTransaction>> transactionsParOper = transactions.stream()
-                  // .filter(clientTransaction -> clientTransaction.getCodeOper().equals("0056"))
+                  // .filter(clientTransaction -> clientTransaction.getCodeOper().equals("2101"))
                 .collect(Collectors.groupingBy(ClientTransaction::getCodeOper));
 
         transactionsParOper.forEach((codeOper, transactionsList) -> {
-                List<Remuneration> remunerations = processTransactionsParOper(codeOper, transactionsList, paliers, s);
+            List<Remuneration> remunerations = processTransactionsParOper(codeOper, transactionsList, paliers, s);
             remunerationsResult.addAll(remunerations);
         });
         return remunerationsResult;
@@ -252,7 +252,6 @@ public class BatcherCalculator {
     private List<Remuneration> processTransactionsParOper(String codeOper, List<ClientTransaction> transactionsList, List<PalierDTO> paliers, String s) {
         //List des paliers opers
         List<Remuneration> remunerations = new ArrayList<>();
-
         //  PalierDTO palier = paliers.stream().filter(p -> p.getCodeOper().equals(codeOper)).findFirst().orElse(null);
         List<PalierDTO> paliersOper = paliers.stream().filter(p -> p.getCodeOper().equals(codeOper)).toList();
         //stop thread if paliersOper is null or empty
@@ -263,7 +262,7 @@ public class BatcherCalculator {
 
         //
         if (paliersOper.size() > 1) {
-            log.info("Plusieurs paliers pour le code oper: " + codeOper);
+           // log.info("Plusieurs paliers pour le code oper: " + codeOper);
             //transactionList group by code service
             Map<String, List<ClientTransaction>> transactionsParService = transactionsList.stream().collect(Collectors.groupingBy(ClientTransaction::getCodeService));
 
@@ -379,7 +378,7 @@ public class BatcherCalculator {
             });
 
         } else {
-            log.info("Un seul palier pour le code oper: " + codeOper);
+           // log.info("Un seul palier pour le code oper: " + codeOper);
             PalierDTO palier = paliersOper.get(0);
             if (palier.getTraitementUnitaire() != null && palier.getTraitementUnitaire()) {
                 transactionsList.forEach(transaction -> {
@@ -481,7 +480,7 @@ public class BatcherCalculator {
 
                 remuneration.setTrasactionType(palier.getDescriptionService());
                 remuneration.setCreatedAt(LocalDateTime.now());
-                remuneration.setCodeOper(palier.getNomOper());
+                remuneration.setCodeOper(palier.getCodeOper());
                 remuneration.setCodeService(palier.getCodeService());
                 remuneration.setCodeEs(s);
                 remunerations.add(remuneration);
@@ -503,7 +502,7 @@ public class BatcherCalculator {
 
 
     private BigDecimal calculateTransactionFeePercentage(BigDecimal transactionAmount, PalierDTO tier) {
-        log.info("Calculating transaction fee percentage...");
+       // log.info("Calculating transaction fee percentage...");
 
         BigDecimal fee = calculateFee(transactionAmount, tier);
         BigDecimal minAmount = getAmount(tier.getMinCom());
@@ -512,33 +511,33 @@ public class BatcherCalculator {
         if (maxAmount.compareTo(BigDecimal.ZERO) > 0 && minAmount.compareTo(BigDecimal.ZERO) > 0) {
             fee = adjustFeeWithinRange(fee, minAmount, maxAmount);
         }
-        log.info("Transaction fee percentage calculated as: " + fee);
+        //log.info("Transaction fee percentage calculated as: " + fee);
         return fee;
     }
 
     // Extract common logic to get the BigDecimal amount
     private BigDecimal getAmount(Double value) {
         BigDecimal amount = value != null ? BigDecimal.valueOf(value) : BigDecimal.ZERO;
-        log.info("Amount obtained: " + amount);
+       // log.info("Amount obtained: " + amount);
         return amount;
     }
 
     private BigDecimal calculateFee(BigDecimal transactionAmount, PalierDTO tier) {
         BigDecimal fee = transactionAmount.multiply(BigDecimal.valueOf(tier.getFraisPourcentage()));
-        log.info("Fee calculated: " + fee);
+       // log.info("Fee calculated: " + fee);
         return fee;
     }
 
     // Adjusts the fee within the min and max range
     private BigDecimal adjustFeeWithinRange(BigDecimal fee, BigDecimal minAmount, BigDecimal maxAmount) {
         if (fee.compareTo(minAmount) < 0) {
-            log.info("Fee is less than minimum amount, adjusting fee to minimum amount.");
+         //   log.info("Fee is less than minimum amount, adjusting fee to minimum amount.");
             return minAmount;
         } else if (fee.compareTo(maxAmount) > 0) {
-            log.info("Fee is greater than maximum amount, adjusting fee to maximum amount.");
+          //  log.info("Fee is greater than maximum amount, adjusting fee to maximum amount.");
             return maxAmount;
         }
-        log.info("Fee is within range, no adjustment needed.");
+      //  log.info("Fee is within range, no adjustment needed.");
         return fee;
     }
 }
