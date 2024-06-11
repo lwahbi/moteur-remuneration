@@ -18,11 +18,16 @@ import java.math.BigDecimal;
 import java.sql.Date;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
+import java.sql.Timestamp;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 //@Component
@@ -35,6 +40,8 @@ public class BatcherCalculator {
     private final JdbcTemplate jdbcTemplate;
     @Value("${palier.service.url}")
     private String url;
+    @Value("${batch.size}")
+    private int batchSize;
 
     public BatcherCalculator(RestTemplate restTemplate, JdbcTemplate jdbcTemplate) {
         this.restTemplate = restTemplate;
@@ -82,10 +89,13 @@ public class BatcherCalculator {
 
 
         log.info("size code es trouvé: " + codeEs.size());
+        log.info("--------------------------------------------------------------------------------------------------------------------------------------------");
+
         LocalDateTime startTime = LocalDateTime.now();
+        log.info("started calculation on : ");
 
 
-        multithreadingProcessor(codeEs, paliers, startTime);
+        List<Remuneration> remunerations = multithreadingProcessorCalcul(codeEs, paliers, startTime);
 
 
         LocalDateTime currentTime = LocalDateTime.now();
@@ -93,7 +103,21 @@ public class BatcherCalculator {
         log.info("finished traitement on : " + finished + " Seconds");
 
         log.info("--------------------------------------------------------------------------------------------------------------------------------------------");
+        startTime = LocalDateTime.now();
 
+        log.info("started persist on : ");
+
+        multithreadingProcessorPersist(remunerations);
+        //  insertRemunerations(remunerations);
+
+
+        currentTime = LocalDateTime.now();
+        finished = ChronoUnit.SECONDS.between(startTime, currentTime);
+        log.info("finished presist on : " + finished + " Seconds");
+
+        log.info("--------------------------------------------------------------------------------------------------------------------------------------------");
+
+        generateCSVFile(remunerations);
 
         // end batch create gp_batch_statistic
         jdbcTemplate.update("UPDATE gp_batch_statistic SET status = ?, updated_at = ? WHERE batch_id = ?", "FINISHED", LocalDateTime.now(), batchId);
@@ -101,12 +125,125 @@ public class BatcherCalculator {
         //restTemplate.postForObject(url + "/api/v1/facture/savealles", codeEs, Void.class);
 
         startTime = LocalDateTime.now();
-        envoyerRemunerations();
+
+        // multithreadingProcessorSendStoredRemunerations();
+        //envoyerRemunerations();
+
         currentTime = LocalDateTime.now();
         finished = ChronoUnit.SECONDS.between(startTime, currentTime);
         log.info("finished traitement on : " + finished + " Seconds");
 
 
+    }
+
+    private void generateCSVFile(List<Remuneration> remunerations) {
+        // parcours de la liste des remunerations
+        // pour chaque remuneration, on ecrit une ligne dans le fichier excel
+        // on enregistre le fichier dans le meme repertoire
+        // les colonnes du fichier sont : id, code_es, montant, commission, trasaction_type, created_at, code_oper, code_service
+        // le nom du fichier est : remunerations.xlsx
+        // le fichier est enregistre dans le repertoire courant
+        ExcelWriter writer = new ExcelWriter();
+        writer.writeExcel(remunerations, "remunerations.xlsx");
+    }
+
+    private void multithreadingProcessorSendStoredRemunerations() {
+        //select from all remunerations from  remuneration_2 group by code_es, and send them to the api /api/v1/remunerations/saveall/{codeEs}
+        List<Remuneration> remunerations = jdbcTemplate.query("SELECT * FROM remuneration_2", (rs, rowNum) -> {
+            Remuneration remuneration = new Remuneration();
+            remuneration.setId(rs.getInt("id"));
+            remuneration.setCodeEs(rs.getString("code_es"));
+            remuneration.setMontant(rs.getBigDecimal("montant"));
+            remuneration.setCommission(rs.getBigDecimal("commission"));
+            remuneration.setTrasactionType(rs.getString("trasaction_type"));
+            remuneration.setCreatedAt(rs.getTimestamp("created_at").toLocalDateTime());
+            remuneration.setCodeOper(rs.getString("code_oper"));
+            return remuneration;
+        });
+
+// Create a list to hold all the CompletableFuture objects
+        List<CompletableFuture<Void>> futures = new ArrayList<>();
+        // Create an instance of RestTemplate
+        RestTemplate restTemplate = new RestTemplate();
+
+        //group remunerations by codeEs
+        Map<String, List<Remuneration>> remunerationsParEs = remunerations.stream().collect(Collectors.groupingBy(Remuneration::getCodeEs));
+        remunerationsParEs.forEach((codeEs, remunerationsList) -> {
+            // Create a CompletableFuture
+            CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
+                // Make the POST request /api/v1/remunerations/saveall/{codeEs}
+                restTemplate.postForObject(url + "/api/v1/remunerations/saveall/" + codeEs, remunerationsList, Void.class);
+            });
+
+            // Add the CompletableFuture to the list
+            futures.add(future);
+        });
+
+        // Wait for all the CompletableFuture objects to complete
+        CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+    }
+
+    private void multithreadingProcessorPersist(List<Remuneration> allRemunerations) {
+        int listSize = allRemunerations.size();
+        int batchSize = 500; // Set your desired batch size
+        String sql = "INSERT INTO remuneration_2 (montant, commission, trasaction_type, " +
+                "created_at, code_oper, code_es, code_service) VALUES (?, ?, ?, ?, ?, ?, ?)";
+
+        for (int i = 0; i < allRemunerations.size(); i += batchSize) {
+
+            final List<Remuneration> batchList = allRemunerations.subList(i, i + batchSize > allRemunerations.size() ? allRemunerations.size() : i + batchSize);
+
+            jdbcTemplate.batchUpdate(sql, new BatchPreparedStatementSetter() {
+                @Override
+                public void setValues(PreparedStatement ps, int i) throws SQLException {
+                    Remuneration remuneration = batchList.get(i);
+                    ps.setBigDecimal(1, remuneration.getMontant());
+                    ps.setBigDecimal(2, remuneration.getCommission());
+                    ps.setString(3, remuneration.getTrasactionType());
+                    ps.setTimestamp(4, Timestamp.valueOf(remuneration.getCreatedAt()));
+                    ps.setString(5, remuneration.getCodeOper());
+                    ps.setString(6, remuneration.getCodeEs());
+                    ps.setString(7, remuneration.getCodeService());
+                }
+
+                @Override
+                public int getBatchSize() {
+                    log.info("reminder list " + (listSize - batchList.size()));
+                    return batchList.size();
+                }
+            });
+        }
+
+
+        /*
+
+        Map<String, List<Remuneration>> groupedRemunerations = remunerations.stream()
+                .collect(Collectors.groupingBy(Remuneration::getCodeEs));
+
+        ExecutorService executorService = Executors.newFixedThreadPool(batchSize);
+        int i = 0;
+        for (Map.Entry<String, List<Remuneration>> entry : groupedRemunerations.entrySet()) {
+            System.out.println("multithreadingProcessorPersist  iteration ===========>  : ( " + (i++) + " ) - code_es: " + entry.getKey() );
+
+           // Map<String, List<Remuneration>> dataMap = Collections.singletonMap(entry.getKey(), entry.getValue());
+            executorService.submit(() -> insertRemunerations(entry.getValue()));
+        }
+
+        awaitExecutorServiceShutdown(executorService);
+
+         */
+    }
+
+    private void awaitExecutorServiceShutdown(ExecutorService executorService) {
+        executorService.shutdown();
+        try {
+            if (!executorService.awaitTermination(60, TimeUnit.MINUTES)) {
+                executorService.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            executorService.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
     }
 
     private void envoyerRemunerations() {
@@ -153,77 +290,87 @@ public class BatcherCalculator {
     }
 
 
-    private List<Remuneration> multithreadingProcessor(List<String> codeEs, List<PalierDTO> paliers, LocalDateTime startTime) {
-        ExecutorService executorService = Executors.newFixedThreadPool(30); // Increased thread pool size
-        CopyOnWriteArrayList<Remuneration> result = new CopyOnWriteArrayList<>();
+    private List<Remuneration> multithreadingProcessorCalcul(List<String> codeEs, List<PalierDTO> paliers, LocalDateTime startTime) {
+        ExecutorService executorService = Executors.newFixedThreadPool(batchSize);
+        List<Future<List<Remuneration>>> futures = new ArrayList<>();
+
         for (String s : codeEs) {
-            log.info("code_es ==================================================================================================================> : " + s);
-            executorService.submit(() -> {
-                List<Remuneration> remunerations = processCodeEs(s, paliers, startTime);
-                insertRemunerations(remunerations, s);
-            });
+            futures.add(executorService.submit(() -> processCodeEs(s, paliers, startTime)));
         }
 
         executorService.shutdown();
-        try {
-            if (!executorService.awaitTermination(60, TimeUnit.MINUTES)) {
-                log.info("Shutting down executor service, it is taking too long to process (upper to 60 min) the tasks in the queue");
-                executorService.shutdownNow();
+
+        List<Remuneration> result = new ArrayList<>();
+        for (Future<List<Remuneration>> future : futures) {
+            try {
+                result.addAll(future.get());
+            } catch (InterruptedException | ExecutionException e) {
+                log.error("Error in multithreadingProcessorCalcul : " + e.getMessage());
+                Thread.currentThread().interrupt();
             }
-        } catch (InterruptedException e) {
-            executorService.shutdownNow();
         }
 
         return result;
     }
 
-    private void insertRemunerations(List<Remuneration> remunerations, String codeEs) {
+    private void insertRemunerations(List<Remuneration> remunerationsParEs) {
         //group remunerations by code_oper and type_transaction
         // show  all  remunerations int the  list on sytem.out
-        Map<String, List<Remuneration>> remunerationsParOper = remunerations.stream().collect(Collectors.groupingBy(Remuneration::getCodeOper));
-        remunerationsParOper.forEach((codeOper, remunerationsList) -> {
-            Map<String, List<Remuneration>> remunerationsParTypeTransaction = remunerationsList.stream().collect(Collectors.groupingBy(Remuneration::getTrasactionType));
+        //  Map<String, List<Remuneration>> remunerationsParEs = remunerations.stream().collect(Collectors.groupingBy(Remuneration::getCodeEs));
+        final AtomicInteger i = new AtomicInteger();
+
+        // remunerationsParEs.forEach((es, remunerationsEs) -> {
+
+        //System.out.println("insertRemunerations iteration ===========>  : ( " + i.getAndIncrement() + " ) - code_es: " + es );
+        Map<String, List<Remuneration>> remunerationsParOper = remunerationsParEs.stream().collect(Collectors.groupingBy(Remuneration::getCodeOper));
+        remunerationsParOper.forEach((codeOper, remunerationsOper) -> {
+            Map<String, List<Remuneration>> remunerationsParTypeTransaction = remunerationsOper.stream().collect(Collectors.groupingBy(Remuneration::getTrasactionType));
 
 
-            remunerationsParTypeTransaction.forEach((s, remunerations1) -> {
+            remunerationsParTypeTransaction.forEach((type, remunerationsType) -> {
 
-                jdbcTemplate.batchUpdate("INSERT INTO remuneration_2 (montant, commission, trasaction_type, created_at, code_oper, code_es,code_service) VALUES (?, ?, ?, ?, ?, ?,?)", new BatchPreparedStatementSetter() {
-                    @Override
-                    public void setValues(PreparedStatement ps, int i) throws SQLException {
-                        //sum Montant and commission
+                remunerationsType.forEach(remuneration -> {
+                    //  log.info("code_es: " + remuneration.getCodeEs() + " code_oper: " + remuneration.getCodeOper() + " type: " + remuneration.getTrasactionType() + " montant: " + remuneration.getMontant() + " commission: " + remuneration.getCommission());
 
-                        BigDecimal montantCalcul = remunerations1.stream().map(remuneration -> remuneration.getMontant()).reduce(BigDecimal.ZERO, BigDecimal::add);
-                        ps.setBigDecimal(1, montantCalcul);
-                        BigDecimal commissionCalcul = remunerations1.stream().map(remuneration -> remuneration.getCommission()).reduce(BigDecimal.ZERO, BigDecimal::add);
-                        ps.setBigDecimal(2, commissionCalcul);
-                        ps.setString(3, s);
-                        Date date = new Date(System.currentTimeMillis());
-                        ps.setDate(4, date);
-                        ps.setString(5, codeOper);
-                        ps.setString(6, codeEs);
-                        if(remunerations1.get(0).getCodeService() != null) {
-                            ps.setString(7, remunerations1.get(0).getCodeService());
-                        }else {
-                            ps.setString(7, "****");
+                    jdbcTemplate.batchUpdate("INSERT INTO remuneration_2 (montant, commission, trasaction_type, created_at, code_oper, code_es,code_service) VALUES (?, ?, ?, ?, ?, ?,?)", new BatchPreparedStatementSetter() {
+                        @Override
+                        public void setValues(PreparedStatement ps, int i) throws SQLException {
+                            //sum Montant and commission
+
+                            BigDecimal montantCalcul = remuneration.getMontant();
+                            ps.setBigDecimal(1, montantCalcul);
+                            BigDecimal commissionCalcul = remuneration.getCommission();
+                            ps.setBigDecimal(2, commissionCalcul);
+                            ps.setString(3, remuneration.getTrasactionType());
+                            Date date = new Date(System.currentTimeMillis());
+                            ps.setDate(4, date);
+                            ps.setString(5, remuneration.getCodeOper());
+                            ps.setString(6, remuneration.getCodeEs());
+                            if (remuneration.getCodeService() != null) {
+                                ps.setString(7, remuneration.getCodeService());
+                            } else {
+                                ps.setString(7, "****");
+                            }
                         }
-                    }
 
-                    @Override
-                    public int getBatchSize() {
-                        return remunerationsParTypeTransaction.size();
-                    }
+                        @Override
+                        public int getBatchSize() {
+                            return remunerationsParTypeTransaction.size();
+                        }
+                    });
                 });
             });
         });
+        //});
     }
 
     private List<Remuneration> processCodeEs(String s, List<PalierDTO> paliers, LocalDateTime start) {
-      //  log.info("code_es: " + s);
+        //  log.info("code_es: " + s);
         List<Remuneration> remunerationsResult = new ArrayList<>();
 
         List<ClientTransaction> transactions = jdbcTemplate.query("SELECT * FROM clients_transactions_2 WHERE code_es = ?", new Object[]{s}, this::mapRow);
         Map<String, List<ClientTransaction>> transactionsParOper = transactions.stream()
-                  // .filter(clientTransaction -> clientTransaction.getCodeOper().equals("2101"))
+                // .filter(clientTransaction -> clientTransaction.getCodeOper().equals("0056"))
                 .collect(Collectors.groupingBy(ClientTransaction::getCodeOper));
 
         transactionsParOper.forEach((codeOper, transactionsList) -> {
@@ -262,7 +409,7 @@ public class BatcherCalculator {
 
         //
         if (paliersOper.size() > 1) {
-           // log.info("Plusieurs paliers pour le code oper: " + codeOper);
+            // log.info("Plusieurs paliers pour le code oper: " + codeOper);
             //transactionList group by code service
             Map<String, List<ClientTransaction>> transactionsParService = transactionsList.stream().collect(Collectors.groupingBy(ClientTransaction::getCodeService));
 
@@ -378,7 +525,7 @@ public class BatcherCalculator {
             });
 
         } else {
-           // log.info("Un seul palier pour le code oper: " + codeOper);
+            // log.info("Un seul palier pour le code oper: " + codeOper);
             PalierDTO palier = paliersOper.get(0);
             if (palier.getTraitementUnitaire() != null && palier.getTraitementUnitaire()) {
                 transactionsList.forEach(transaction -> {
@@ -502,7 +649,7 @@ public class BatcherCalculator {
 
 
     private BigDecimal calculateTransactionFeePercentage(BigDecimal transactionAmount, PalierDTO tier) {
-       // log.info("Calculating transaction fee percentage...");
+        // log.info("Calculating transaction fee percentage...");
 
         BigDecimal fee = calculateFee(transactionAmount, tier);
         BigDecimal minAmount = getAmount(tier.getMinCom());
@@ -518,26 +665,26 @@ public class BatcherCalculator {
     // Extract common logic to get the BigDecimal amount
     private BigDecimal getAmount(Double value) {
         BigDecimal amount = value != null ? BigDecimal.valueOf(value) : BigDecimal.ZERO;
-       // log.info("Amount obtained: " + amount);
+        // log.info("Amount obtained: " + amount);
         return amount;
     }
 
     private BigDecimal calculateFee(BigDecimal transactionAmount, PalierDTO tier) {
         BigDecimal fee = transactionAmount.multiply(BigDecimal.valueOf(tier.getFraisPourcentage()));
-       // log.info("Fee calculated: " + fee);
+        // log.info("Fee calculated: " + fee);
         return fee;
     }
 
     // Adjusts the fee within the min and max range
     private BigDecimal adjustFeeWithinRange(BigDecimal fee, BigDecimal minAmount, BigDecimal maxAmount) {
         if (fee.compareTo(minAmount) < 0) {
-         //   log.info("Fee is less than minimum amount, adjusting fee to minimum amount.");
+            //   log.info("Fee is less than minimum amount, adjusting fee to minimum amount.");
             return minAmount;
         } else if (fee.compareTo(maxAmount) > 0) {
-          //  log.info("Fee is greater than maximum amount, adjusting fee to maximum amount.");
+            //  log.info("Fee is greater than maximum amount, adjusting fee to maximum amount.");
             return maxAmount;
         }
-      //  log.info("Fee is within range, no adjustment needed.");
+        //  log.info("Fee is within range, no adjustment needed.");
         return fee;
     }
 }
