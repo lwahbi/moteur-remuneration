@@ -32,7 +32,7 @@ public class  Remuneration {
     private String codeService;
     @Column(name = "commission", nullable = false, precision = 19, scale = 2)
     private BigDecimal commission;
-    private String trasactionType;
+    private String transactionType;
 
     @Column(name = "created_at")
     private LocalDateTime createdAt;
