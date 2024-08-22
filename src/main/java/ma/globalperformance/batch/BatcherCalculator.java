@@ -82,7 +82,7 @@ public class BatcherCalculator {
 
         // Get all the codeEs
         List<String> codeEs = jdbcTemplate.queryForList("SELECT DISTINCT code_es FROM clients_transactions_2", String.class);
-        //List<String> codeEs = Arrays.asList("000015");
+     //   List<String> codeEs = Arrays.asList("000015");
 
 
         log.info("size code es trouvé: " + codeEs.size());
@@ -97,12 +97,10 @@ public class BatcherCalculator {
 
         LocalDateTime currentTime = LocalDateTime.now();
         long finished = ChronoUnit.SECONDS.between(startTime, currentTime);
-        log.info("finished traitement on : " + finished + " Seconds");
+        log.info("finished calcul on : " + finished + " Seconds");
 
-        log.info("--------------------------------------------------------------------------------------------------------------------------------------------");
-        startTime = LocalDateTime.now();
 
-        log.info("started persist on : ");
+        log.info("started persist  : ");
 
         multithreadingProcessorPersist(remunerations);
         //  insertRemunerations(remunerations);
@@ -116,19 +114,19 @@ public class BatcherCalculator {
 
        // generateCSVFile(remunerations);
 
-        // end batch create gp_batch_statistic
-        jdbcTemplate.update("UPDATE gp_batch_statistic SET status = ?, updated_at = ? WHERE batch_id = ?", "FINISHED", LocalDateTime.now(), batchId);
 
         //restTemplate.postForObject(url + "/api/v1/facture/savealles", codeEs, Void.class);
 
-        startTime = LocalDateTime.now();
 
-        // multithreadingProcessorSendStoredRemunerations();
+
+         multithreadingProcessorSendStoredRemunerations();
         //envoyerRemunerations();
 
         currentTime = LocalDateTime.now();
         finished = ChronoUnit.SECONDS.between(startTime, currentTime);
-        log.info("finished traitement on : " + finished + " Seconds");
+        log.info("finished send data  on : " + finished + " Seconds");
+        // end batch create gp_batch_statistic
+        jdbcTemplate.update("UPDATE gp_batch_statistic SET status = ?, updated_at = ? WHERE batch_id = ?", "FINISHED", LocalDateTime.now(), batchId);
 
 
     }
@@ -361,7 +359,7 @@ public class BatcherCalculator {
 
         List<ClientTransaction> transactions = jdbcTemplate.query("SELECT * FROM clients_transactions_2 WHERE code_es = ?", new Object[]{s}, this::mapRow);
         Map<String, List<ClientTransaction>> transactionsParOper = transactions.stream()
-                // .filter(clientTransaction -> clientTransaction.getCodeOper().equals("0050"))
+                .filter(clientTransaction -> clientTransaction.getCodeOper().equals("0001"))
                 .collect(Collectors.groupingBy(ClientTransaction::getCodeOper));
 
         transactionsParOper.forEach((codeOper, transactionsList) -> {
