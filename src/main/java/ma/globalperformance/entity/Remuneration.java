@@ -2,23 +2,14 @@ package ma.globalperformance.entity;
 
 import lombok.Data;
 
+import javax.persistence.*;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
-import java.util.Date;
-
-import javax.persistence.Column;
-import javax.persistence.Entity;
-import javax.persistence.GeneratedValue;
-import javax.persistence.GenerationType;
-import javax.persistence.Id;
-import javax.persistence.Table;
-import javax.persistence.Temporal;
-import javax.persistence.TemporalType;
 
 @Entity
 @Table(name = "remuneration_2")
 @Data
-public class  Remuneration {
+public class Remuneration {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -29,6 +20,7 @@ public class  Remuneration {
     @Column(name = "montant", nullable = false, precision = 19, scale = 2)
     private BigDecimal montant;
     private String codeOper;
+    private String nameOper;
     private String codeService;
     @Column(name = "commission", nullable = false, precision = 19, scale = 2)
     private BigDecimal commission;

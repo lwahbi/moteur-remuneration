@@ -25,6 +25,7 @@ public class ExcelWriter {
             headerCell.setCellValue(columns[i]);
         }
 
+
         int rowNum = 1;
         for (Remuneration remuneration: remunerations) {
             Row row = sheet.createRow(rowNum++);
